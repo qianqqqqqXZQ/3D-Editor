@@ -1,6 +1,38 @@
-# 3D-Editor 工作计划
+# Part-Level 4DGS Animation Editor 计划
 
-- [x] 创建本地 Git 工作区
-- [x] 配置 GitHub 远程仓库 `https://github.com/qianqqqqqXZQ/3D-Editor.git`
-- [ ] 从远程获取代码并确认默认分支
-- [ ] 根据项目内容补充运行和测试步骤
+- [x] 检查现有仓库、Python 环境和依赖状态
+- [x] 建立 `project-work` 工作文档目录与 `generated` 导出目录
+- [x] 在 Git 中保存实现前基线
+- [x] 实现 Flask 全局 `STATE`、静态 PLY/PT 解析和多文件 Part 建立
+- [x] 实现框选创建 Part、Pivot、颜色、关键帧和线性/Catmull-Rom 插值 API
+- [x] 实现 4DGS `.pt` 帧序列导入、变换预览和当前/全部帧导出
+- [x] 实现内嵌原生 HTML/CSS/JS Three.js 编辑器界面
+- [x] 添加本地 Three.js r128 与 OrbitControls 资源
+- [x] 运行 Python 编译检查与内存 API 流程测试
+- [x] 回归验证 Part 拆分所有权、4DGS 叠加和 PT 完整字段导出
+- [x] 启动 Flask 并验证根页面、静态资源和 `/api/state`
+- [x] 添加 CPU 版 `Dockerfile`、`requirements.txt` 和 `.dockerignore`
+- [ ] 执行 Docker 镜像构建验证（当前系统未安装 Docker CLI）
+- [ ] 在真实浏览器中继续做视觉回归（需要用户侧浏览器/Playwright 环境）
+
+## 运行
+
+```powershell
+py -3.13 -m pip install flask numpy torch plyfile
+py -3.13 app.py
+```
+
+访问 `http://localhost:5011`。
+
+## 验证
+
+```powershell
+py -3.13 -m py_compile app.py
+```
+
+Docker:
+
+```powershell
+docker build -t part-level-4dgs-editor .
+docker run --rm -p 5011:5011 -v "${PWD}/generated:/app/generated" part-level-4dgs-editor
+```
