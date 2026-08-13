@@ -7,6 +7,7 @@ import struct
 import tempfile
 import threading
 import zipfile
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -126,7 +127,8 @@ def load_ply_bytes(data: bytes) -> Dict[str, Any]:
     qnames = [("rot_0", 0), ("rot_1", 1), ("rot_2", 2), ("rot_3", 3)]
     if all(k in names for k, _ in qnames):
         quats = np.stack([vertex[k] for k, _ in qnames], axis=1).astype(np.float64)
-    scales = np.stack([np.asarray(vertex[f"scale_{a}"], dtype=np.float64) if f"scale_{a}" in names else np.zeros(n) for a in ("x", "y", "z")], axis=1)
+    scale_names = [("scale_0", "scale_x"), ("scale_1", "scale_y"), ("scale_2", "scale_z")]
+    scales = np.stack([np.asarray(vertex[next(name for name in aliases if name in names)], dtype=np.float64) if any(name in names for name in aliases) else np.zeros(n) for aliases in scale_names], axis=1)
     opacities = np.asarray(vertex["opacity"], dtype=np.float64) if "opacity" in names else np.zeros(n)
     sh0 = np.zeros((n, 3), dtype=np.float64)
     for i, key in enumerate(("f_dc_0", "f_dc_1", "f_dc_2")):
@@ -135,7 +137,8 @@ def load_ply_bytes(data: bytes) -> Dict[str, Any]:
     sh_rest = None
     if rest_keys and len(rest_keys) % 3 == 0:
         sh_rest = np.stack([vertex[k] for k in rest_keys], axis=1).reshape((n, -1, 3)).astype(np.float64)
-    degree = int(round(math.sqrt((sh_rest.shape[1] + 1) if sh_rest is not None else 1) - 1)) if sh_rest is not None else 0
+    n_rest = int(sh_rest.shape[1] * 3) if sh_rest is not None else 0
+    degree = int(math.sqrt(n_rest // 3 + 1)) - 1 if n_rest else 0
     return {"xyz": xyz, "quats": quats, "scales": scales, "opacities": opacities,
             "sh0": sh0, "sh_rest": sh_rest, "sh_degree": max(degree, 0), "n_vertices": n}
 
@@ -146,13 +149,154 @@ def load_pt_bytes(data: bytes) -> Dict[str, Any]:
     obj = torch.load(io.BytesIO(data), map_location="cpu", weights_only=False)
     if isinstance(obj, dict) and "frames" in obj and isinstance(obj["frames"], (list, tuple)):
         obj = obj["frames"][0]
+    if isinstance(obj, dict) and isinstance(obj.get("splats"), dict):
+        splats = obj["splats"]
+        obj = {**splats, "sh_degree": obj.get("sh_degree", 0)}
     if isinstance(obj, (list, tuple)) and obj and isinstance(obj[0], (dict, tuple, list)):
         obj = obj[0]
     def to_np(v):
         return v.detach().cpu().numpy() if hasattr(v, "detach") else v
     if isinstance(obj, dict):
         obj = {k: to_np(v) for k, v in obj.items()}
-    return _normalise_frame(obj)
+    frame = _normalise_frame(obj)
+    if isinstance(obj, dict) and "sh0" in obj:
+        frame["sh0"] = np.asarray(obj["sh0"], dtype=np.float64).reshape((frame["n_vertices"], -1, 3))[:, 0, :]
+    if isinstance(obj, dict) and "shN" in obj:
+        sr = np.asarray(obj["shN"], dtype=np.float64)
+        if sr.size == 0:
+            frame["sh_rest"] = None
+        elif sr.ndim == 2:
+            frame["sh_rest"] = sr.reshape((frame["n_vertices"], -1, 3))
+        elif sr.ndim == 3 and sr.shape[0] == frame["n_vertices"]:
+            frame["sh_rest"] = sr.reshape((frame["n_vertices"], -1, 3))
+    frame["sh_degree"] = int(obj.get("sh_degree", frame.get("sh_degree", 0))) if isinstance(obj, dict) else frame.get("sh_degree", 0)
+    return frame
+
+
+def load_ply(filepath: str) -> Dict[str, Any]:
+    """Load a PLY file into the editor's canonical NumPy representation."""
+    with open(filepath, "rb") as handle:
+        return load_ply_bytes(handle.read())
+
+
+def load_pt(filepath: str) -> Dict[str, Any]:
+    """Load a gsplat checkpoint (nested ``splats`` or flat) from disk."""
+    with open(filepath, "rb") as handle:
+        return load_pt_bytes(handle.read())
+
+
+def save_frame_as_pt(xyz, quats, scales, opacities, sh0, sh_rest, sh_degree, filepath):
+    """Write one canonical frame using the gsplat checkpoint schema."""
+    if torch is None:
+        raise RuntimeError("PyTorch is required to save .pt files")
+    xyz = np.asarray(xyz); n = len(xyz)
+    splats = {
+        "means": torch.from_numpy(xyz.astype(np.float32)),
+        "quats": torch.from_numpy(np.asarray(quats).reshape(n, 4).astype(np.float32)),
+        "scales": torch.from_numpy(np.asarray(scales).reshape(n, 3).astype(np.float32)),
+        "opacities": torch.from_numpy(np.asarray(opacities).reshape(n).astype(np.float32)),
+        "sh0": torch.from_numpy(np.asarray(sh0).reshape(n, 3).astype(np.float32)).reshape(n, 1, 3),
+    }
+    if sh_rest is None:
+        splats["shN"] = torch.zeros((n, 0, 3), dtype=torch.float32)
+    else:
+        splats["shN"] = torch.from_numpy(np.asarray(sh_rest).reshape(n, -1, 3).astype(np.float32))
+    torch.save({"splats": splats, "sh_degree": int(sh_degree)}, filepath)
+
+
+def _pad_sh_rest(rest, n, target_k):
+    out = np.zeros((n, target_k, 3), dtype=np.float64)
+    if rest is not None:
+        a = np.asarray(rest, dtype=np.float64).reshape(n, -1, 3)
+        out[:, :min(target_k, a.shape[1]), :] = a[:, :target_k, :]
+    return out
+
+
+def load_4dgs_dir(dir_path: str) -> Dict[str, Any]:
+    """Load sorted ``.pt`` frames and pad all SH tensors to the maximum degree."""
+    path = Path(dir_path)
+    if not path.is_dir():
+        raise FileNotFoundError(f"4DGS directory not found: {dir_path}")
+    files = sorted((p for p in path.iterdir() if p.is_file() and p.suffix.lower() == ".pt"), key=lambda p: p.name.lower())
+    if not files:
+        raise ValueError(f"No .pt frames found in {dir_path}")
+    frames = [load_pt(str(p)) for p in files]
+    max_degree = max(int(f.get("sh_degree", 0)) for f in frames)
+    target_k = max(0, (max_degree + 1) ** 2 - 1)
+    for frame in frames:
+        frame["sh_rest"] = _pad_sh_rest(frame.get("sh_rest"), frame["n_vertices"], target_k)
+        frame["sh_degree"] = max_degree
+    return {"frames": frames, "n_frames_src": len(frames), "sh_degree": max_degree,
+            "filenames": [p.name for p in files]}
+
+
+def _get_4dgs_frame_idx(pid: int, frame: int) -> int:
+    info = STATE["4dgs_parts"][pid]
+    n_src = int(info["n_frames_src"])
+    if n_src <= 0:
+        return 0
+    return frame % n_src if info.get("loop", False) else min(frame, n_src - 1)
+
+
+def euler_to_rotation_matrix(rx_deg, ry_deg, rz_deg):
+    rx, ry, rz = np.deg2rad([rx_deg, ry_deg, rz_deg])
+    cx, sx, cy, sy, cz, sz = np.cos(rx), np.sin(rx), np.cos(ry), np.sin(ry), np.cos(rz), np.sin(rz)
+    Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
+
+
+def rotation_matrix_to_quaternion(R):
+    R = np.asarray(R, dtype=np.float64).reshape(3, 3); trace = np.trace(R)
+    if trace > 0:
+        s = 2 * np.sqrt(trace + 1); q = np.array([0.25*s, (R[2,1]-R[1,2])/s, (R[0,2]-R[2,0])/s, (R[1,0]-R[0,1])/s])
+    else:
+        i = int(np.argmax(np.diag(R)))
+        if i == 0:
+            s = 2*np.sqrt(max(1+R[0,0]-R[1,1]-R[2,2], 1e-15)); q = np.array([(R[2,1]-R[1,2])/s, .25*s, (R[0,1]+R[1,0])/s, (R[0,2]+R[2,0])/s])
+        elif i == 1:
+            s = 2*np.sqrt(max(1+R[1,1]-R[0,0]-R[2,2], 1e-15)); q = np.array([(R[0,2]-R[2,0])/s, (R[0,1]+R[1,0])/s, .25*s, (R[1,2]+R[2,1])/s])
+        else:
+            s = 2*np.sqrt(max(1+R[2,2]-R[0,0]-R[1,1], 1e-15)); q = np.array([(R[1,0]-R[0,1])/s, (R[0,2]+R[2,0])/s, (R[1,2]+R[2,1])/s, .25*s])
+    return q / max(np.linalg.norm(q), 1e-15)
+
+
+def quaternion_multiply(q1, q2):
+    a, b = np.asarray(q1, dtype=np.float64), np.asarray(q2, dtype=np.float64)
+    a, b = np.broadcast_arrays(a, b); w1,x1,y1,z1 = np.moveaxis(a, -1, 0); w2,x2,y2,z2 = np.moveaxis(b, -1, 0)
+    return np.stack((w1*w2-x1*x2-y1*y2-z1*z2, w1*x2+x1*w2+y1*z2-z1*y2, w1*y2-x1*z2+y1*w2+z1*x2, w1*z2+x1*y2-y1*x2+z1*w2), axis=-1)
+
+
+def lerp(a, b, t):
+    return np.asarray(a) + t * (np.asarray(b) - np.asarray(a))
+
+
+def interpolate_keyframes(keyframes: list, frame: int, method: str = "linear") -> dict:
+    names = ("tx", "ty", "tz", "rx", "ry", "rz")
+    if not keyframes:
+        return {"frame": frame, **{k: 0.0 for k in names}}
+    keys = sorted(keyframes, key=lambda x: x.get("frame", 0))
+    if frame <= keys[0].get("frame", 0): return {"frame": frame, **{k: float(keys[0].get(k, 0)) for k in names}}
+    if frame >= keys[-1].get("frame", 0): return {"frame": frame, **{k: float(keys[-1].get(k, 0)) for k in names}}
+    hi = next(i for i, k in enumerate(keys) if k.get("frame", 0) >= frame); a, b = keys[hi-1], keys[hi]; t = (frame-a["frame"]) / max(1, b["frame"]-a["frame"])
+    result = {"frame": frame}
+    for k in names:
+        if method == "catmull-rom" and k in ("tx", "ty", "tz") and len(keys) >= 2:
+            p0, p3 = keys[max(0, hi-2)], keys[min(len(keys)-1, hi+1)]; v0,v1,v2,v3 = [float(x.get(k,0)) for x in (p0,a,b,p3)]
+            result[k] = .5*((2*v1)+(-v0+v2)*t+(2*v0-5*v1+4*v2-v3)*t*t+(-v0+3*v1-3*v2+v3)*t*t*t)
+        else: result[k] = float(lerp(a.get(k,0), b.get(k,0), t))
+    return result
+
+
+def _apply_transform_to_data(xyz, quats, pivot, tf):
+    xyz = np.asarray(xyz, dtype=np.float64); quats = np.asarray(quats, dtype=np.float64)
+    # Keyframe tracks store radians; the public Euler helper accepts degrees.
+    R = euler_to_rotation_matrix(*np.rad2deg([tf.get("rx", 0), tf.get("ry", 0), tf.get("rz", 0)])); p = np.asarray(pivot, dtype=np.float64)
+    t = np.asarray([tf.get("tx", 0), tf.get("ty", 0), tf.get("tz", 0)], dtype=np.float64)
+    if np.allclose(R, np.eye(3)) and np.allclose(t, 0): return xyz.copy(), quats.copy()
+    rq = rotation_matrix_to_quaternion(R)
+    return (xyz-p) @ R.T + p + t, quaternion_multiply(rq, quats)
 
 
 def _serialize_part(pid: int, part: Dict[str, Any]) -> Dict[str, Any]:
@@ -209,33 +353,35 @@ def _rotate_quats(quats: np.ndarray, key: Dict[str, float]) -> np.ndarray:
 
 def _key_for(pid: int, frame: int) -> Dict[str, float]:
     keys = sorted(STATE["tracks"].get(pid, []), key=lambda x: x["frame"])
-    if not keys: return {"tx": 0, "ty": 0, "tz": 0, "rx": 0, "ry": 0, "rz": 0}
-    if frame <= keys[0]["frame"]: return keys[0]
-    if frame >= keys[-1]["frame"]: return keys[-1]
-    for a, b in zip(keys, keys[1:]):
-        if a["frame"] <= frame <= b["frame"]:
-            u = (frame - a["frame"]) / max(1, b["frame"] - a["frame"])
-            if STATE["interpolation_method"] == "catmull-rom" and len(keys) >= 4:
-                i = keys.index(a); p0, p3 = keys[max(0, i-1)], keys[min(len(keys)-1, i+2)]
-                out = {"frame": frame}
-                for k in ("tx", "ty", "tz", "rx", "ry", "rz"):
-                    v0, v1, v2, v3 = p0[k], a[k], b[k], p3[k]
-                    out[k] = 0.5 * ((2*v1) + (-v0+v2)*u + (2*v0-5*v1+4*v2-v3)*u*u + (-v0+3*v1-3*v2+v3)*u*u*u)
-                return out
-            return {"frame": frame, **{k: a.get(k, 0) * (1-u) + b.get(k, 0) * u for k in ("tx", "ty", "tz", "rx", "ry", "rz")}}
-    return keys[-1]
+    return interpolate_keyframes(keys, frame, STATE["interpolation_method"])
 
 
 def _write_pt(path: str, frame: Dict[str, Any]) -> None:
-    if torch is None: raise RuntimeError("PyTorch is required for export")
-    payload = {"xyz": torch.from_numpy(np.asarray(frame["xyz"], dtype=np.float32)),
-               "quats": torch.from_numpy(np.asarray(frame["quats"], dtype=np.float32)),
-               "scales": torch.from_numpy(np.asarray(frame["scales"], dtype=np.float32)),
-               "opacities": torch.from_numpy(np.asarray(frame["opacities"], dtype=np.float32)),
-               "sh0": torch.from_numpy(np.asarray(frame["sh0"], dtype=np.float32)),
-               "sh_degree": int(frame.get("sh_degree", 0))}
-    if frame.get("sh_rest") is not None: payload["sh_rest"] = torch.from_numpy(np.asarray(frame["sh_rest"], dtype=np.float32))
-    torch.save(payload, path)
+    save_frame_as_pt(frame["xyz"], frame["quats"], frame["scales"], frame["opacities"], frame["sh0"], frame.get("sh_rest"), frame.get("sh_degree", 0), path)
+
+
+def compute_frame_data(frame: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute transformed static arrays from the immutable STATE source data."""
+    xyz = np.array(STATE["xyz"], dtype=np.float64, copy=True) if STATE["xyz"] is not None else np.zeros((0, 3))
+    quats = np.array(STATE["quats"], dtype=np.float64, copy=True) if STATE["quats"] is not None else np.zeros((len(xyz), 4))
+    for pid, part in STATE["parts"].items():
+        if part.get("is_4dgs"):
+            continue
+        indices = sorted(part.get("vertex_indices", set()))
+        if indices:
+            xyz[indices], quats[indices] = _apply_transform_to_data(xyz[indices], quats[indices], part["pivot"], _key_for(pid, frame))
+    return xyz, quats
+
+
+def compute_full_frame_data(frame: int, apply_transforms: bool = True) -> Dict[str, Any]:
+    """Build one frame, padding SH rest coefficients across all sources."""
+    data = frame_data(frame) if apply_transforms else frame_data(0)
+    if not apply_transforms:
+        data["xyz"], data["quats"] = compute_frame_data(0)
+    max_degree = max(int(data.get("sh_degree", 0)), 0); target_k = max(0, (max_degree + 1) ** 2 - 1)
+    data["sh_rest"] = _pad_sh_rest(data.get("sh_rest"), len(data["xyz"]), target_k)
+    data["sh_degree"] = max_degree; data["n_vertices"] = len(data["xyz"]); data["part_id_array"] = data.get("part_ids")
+    return data
 
 
 def frame_data(frame: int) -> Dict[str, Any]:
@@ -243,7 +389,7 @@ def frame_data(frame: int) -> Dict[str, Any]:
         xyzs, quats, scales, opacities, sh0s, rests, cols, ids, source_indices = [], [], [], [], [], [], [], [], []
         for pid, part in STATE["parts"].items():
             if part.get("is_4dgs"):
-                info = STATE["4dgs_parts"].get(pid); src = info["frames"][frame % len(info["frames"])] if info and info["frames"] else None
+                info = STATE["4dgs_parts"].get(pid); src = info["frames"][_get_4dgs_frame_idx(pid, frame)] if info and info["frames"] else None
                 if src is None: continue
                 idx = None
             else:
@@ -260,11 +406,11 @@ def frame_data(frame: int) -> Dict[str, Any]:
         if not xyzs:
             return {"xyz": np.zeros((0,3)), "quats": np.zeros((0,4)), "scales": np.zeros((0,3)), "opacities": np.zeros(0),
                     "sh0": np.zeros((0,3)), "sh_rest": None, "sh_degree": 0, "colors": np.zeros((0,3)), "part_ids": np.zeros(0, dtype=np.int32), "source_indices": np.zeros(0, dtype=np.int32), "frame": frame}
-        valid_rests = [r for r in rests if r is not None]
-        rest_shape = valid_rests[0].shape[1:] if valid_rests else None
-        combined_rest = np.concatenate(rests, axis=0) if rest_shape and all(r is not None and r.shape[1:] == rest_shape for r in rests) else None
+        max_degree = max([STATE["sh_degree"]] + [STATE["4dgs_parts"][p]["sh_degree"] for p in STATE["4dgs_parts"]])
+        target_k = max(0, (max_degree + 1) ** 2 - 1)
+        combined_rest = np.concatenate([_pad_sh_rest(r, len(xyzs[i]), target_k) for i, r in enumerate(rests)], axis=0) if target_k else np.zeros((sum(len(x) for x in xyzs), 0, 3), dtype=np.float64)
         return {"xyz": np.concatenate(xyzs), "quats": np.concatenate(quats), "scales": np.concatenate(scales), "opacities": np.concatenate(opacities),
-                "sh0": np.concatenate(sh0s), "sh_rest": combined_rest, "sh_degree": max([STATE["sh_degree"]] + [STATE["4dgs_parts"][p]["sh_degree"] for p in STATE["4dgs_parts"]]),
+                "sh0": np.concatenate(sh0s), "sh_rest": combined_rest, "sh_degree": max_degree,
                 "colors": np.concatenate(cols), "part_ids": np.concatenate(ids), "source_indices": np.concatenate(source_indices), "frame": frame}
 
 
@@ -386,8 +532,13 @@ def api_import_4dgs():
     if not frames: return jsonify({"error": "没有有效的 .pt 文件"}), 400
     with STATE_LOCK:
         pid = STATE["next_part_id"]; STATE["next_part_id"] += 1; base = frames[0]
+        max_degree = max(int(frame.get("sh_degree", 0)) for frame in frames)
+        target_k = max(0, (max_degree + 1) ** 2 - 1)
+        for frame_data_item in frames:
+            frame_data_item["sh_rest"] = _pad_sh_rest(frame_data_item.get("sh_rest"), frame_data_item["n_vertices"], target_k)
+            frame_data_item["sh_degree"] = max_degree
         STATE["parts"][pid] = {"name": request.form.get("name") or f"4DGS Part {pid}", "color": _color_for(pid), "pivot": np.mean(base["xyz"], axis=0).tolist() if base["n_vertices"] else [0,0,0], "vertex_indices": set(), "is_4dgs": True}
-        STATE["4dgs_parts"][pid] = {"frames": frames, "n_frames_src": len(frames), "sh_degree": base["sh_degree"], "loop": True, "filenames": names}
+        STATE["4dgs_parts"][pid] = {"frames": frames, "n_frames_src": len(frames), "sh_degree": max_degree, "loop": True, "filenames": names}
         STATE["tracks"][pid] = []
     return jsonify(state_summary())
 

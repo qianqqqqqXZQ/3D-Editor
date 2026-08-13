@@ -43,3 +43,5 @@ docker run --rm -p 5011:5011 -v "${PWD}/generated:/app/generated" part-level-4dg
 ## 本轮变更备忘
 
 需求来源为附件 `pasted-text.txt`：要求提供 `load_ply`、`load_pt`、`save_frame_as_pt`、`load_4dgs_dir`、旋转/四元数、关键帧插值及从原始状态重算帧数据的公开函数。实现应保持现有 Flask API 和前端兼容，并统一返回 NumPy `float64` 数据。
+
+本轮已完成上述接口；验证命令为 `py -3.13 -m py_compile app.py`，并使用内存 PLY/PT、目录 SH 补齐和 Flask `test_client` 做回归。
