@@ -29,4 +29,6 @@ The server listens on `http://localhost:5011`.
 The current task adds a specified SH DC color conversion, binary `GET /api/pointcloud`, and
 REST-style Part APIs while retaining legacy UI routes. State changes hold `STATE_LOCK`; static
 point clouds use global arrays plus `part_id_array`, while source 4DGS frames are held in
-`STATE['4dgs_parts']`. Verify this work using Flask's test client and in-memory PLY/PT fixtures.
+`STATE['4dgs_parts']`. `GET /api/pointcloud` is intentionally source-data-only: it does not
+apply keyframe transforms, emits little-endian count/xyz/rgb/part-id arrays, and colors unassigned
+static points from SH DC. Verify this work using Flask's test client and in-memory PLY/PT fixtures.

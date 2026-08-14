@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, Response, jsonify, request, send_file
 
 try:
     import torch
@@ -27,6 +27,21 @@ except Exception:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPORT_ROOT = os.path.join(BASE_DIR, "generated")
 os.makedirs(EXPORT_ROOT, exist_ok=True)
+UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "part_level_4dgs_uploads")
+os.makedirs(UPLOAD_ROOT, exist_ok=True)
+
+PART_COLORS = [
+    [0.9, 0.2, 0.2],
+    [0.2, 0.7, 0.2],
+    [0.2, 0.4, 0.9],
+    [0.9, 0.7, 0.1],
+    [0.7, 0.2, 0.8],
+    [0.1, 0.8, 0.8],
+    [0.9, 0.5, 0.2],
+    [0.5, 0.9, 0.3],
+    [0.3, 0.5, 0.9],
+]
+C0 = 0.28209479177387814
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 400 * 1024 * 1024
@@ -206,10 +221,17 @@ def save_frame_as_pt(xyz, quats, scales, opacities, sh0, sh_rest, sh_degree, fil
 
 def _pad_sh_rest(rest, n, target_k):
     out = np.zeros((n, target_k, 3), dtype=np.float64)
+    if n == 0:
+        return out
     if rest is not None:
         a = np.asarray(rest, dtype=np.float64).reshape(n, -1, 3)
         out[:, :min(target_k, a.shape[1]), :] = a[:, :target_k, :]
     return out
+
+
+def sh_to_rgb(sh0: Any) -> np.ndarray:
+    """Convert the DC spherical-harmonic coefficients to clipped RGB."""
+    return np.clip(np.asarray(sh0, dtype=np.float64) * C0 + 0.5, 0, 1)
 
 
 def load_4dgs_dir(dir_path: str) -> Dict[str, Any]:
@@ -300,8 +322,13 @@ def _apply_transform_to_data(xyz, quats, pivot, tf):
 
 
 def _serialize_part(pid: int, part: Dict[str, Any]) -> Dict[str, Any]:
-    return {"id": pid, "name": part["name"], "color": part["color"], "pivot": part["pivot"],
-            "count": len(part.get("vertex_indices", set())), "is_4dgs": bool(part.get("is_4dgs", False))}
+    n_vertices = len(part.get("vertex_indices", set()))
+    payload = {"id": pid, "name": part["name"], "color": part["color"], "pivot": part["pivot"],
+               "count": n_vertices, "n_vertices": n_vertices, "is_4dgs": bool(part.get("is_4dgs", False))}
+    if payload["is_4dgs"]:
+        info = STATE["4dgs_parts"].get(pid, {})
+        payload.update({"n_frames_src": int(info.get("n_frames_src", 0)), "loop": bool(info.get("loop", False))})
+    return payload
 
 
 def state_summary() -> Dict[str, Any]:
@@ -314,8 +341,82 @@ def state_summary() -> Dict[str, Any]:
 
 
 def _color_for(pid: int) -> List[float]:
-    palette = [[0.20, 0.75, 1.0], [1.0, 0.38, 0.28], [0.42, 0.95, 0.50], [1.0, 0.78, 0.20], [0.75, 0.42, 1.0]]
-    return palette[pid % len(palette)]
+    return list(PART_COLORS[pid % len(PART_COLORS)])
+
+
+def _empty_static_arrays() -> None:
+    """Initialise the static arrays so a 4DGS-only workspace remains well-formed."""
+    STATE["xyz"] = np.zeros((0, 3), dtype=np.float64)
+    STATE["quats"] = np.zeros((0, 4), dtype=np.float64)
+    STATE["scales"] = np.zeros((0, 3), dtype=np.float64)
+    STATE["opacities"] = np.zeros(0, dtype=np.float64)
+    STATE["sh0"] = np.zeros((0, 3), dtype=np.float64)
+    STATE["sh_rest"] = np.zeros((0, 0, 3), dtype=np.float64)
+    STATE["part_id_array"] = np.zeros(0, dtype=np.int32)
+    STATE["n_vertices"] = 0
+
+
+def _reset_workspace() -> None:
+    """Clear all editor state before an initial upload establishes a new workspace."""
+    STATE.clear()
+    STATE.update({
+        "loaded": False, "filename": "", "n_vertices": 0, "xyz": None, "quats": None,
+        "scales": None, "opacities": None, "sh0": None, "sh_rest": None, "sh_degree": 0,
+        "part_id_array": None, "parts": {}, "next_part_id": 0, "tracks": {}, "num_frames": 30,
+        "interpolation_method": "linear", "export_progress": -1, "export_dir": None, "4dgs_parts": {},
+    })
+
+
+def _normalise_static_sh_degree(target_degree: int) -> None:
+    """Pad the static SH storage to the workspace-wide maximum degree."""
+    n_vertices = int(STATE["n_vertices"])
+    target_k = max(0, (int(target_degree) + 1) ** 2 - 1)
+    STATE["sh_rest"] = _pad_sh_rest(STATE.get("sh_rest"), n_vertices, target_k)
+    STATE["sh_degree"] = int(target_degree)
+
+
+def _combine_static_frames(frames: List[Dict[str, Any]], target_degree: int) -> Dict[str, Any]:
+    """Concatenate canonical frames after padding each SH tensor to one degree."""
+    target_k = max(0, (int(target_degree) + 1) ** 2 - 1)
+    n_vertices = sum(int(frame["n_vertices"]) for frame in frames)
+    return {
+        "xyz": np.concatenate([frame["xyz"] for frame in frames], axis=0),
+        "quats": np.concatenate([frame["quats"] for frame in frames], axis=0),
+        "scales": np.concatenate([frame["scales"] for frame in frames], axis=0),
+        "opacities": np.concatenate([frame["opacities"] for frame in frames], axis=0),
+        "sh0": np.concatenate([frame["sh0"] for frame in frames], axis=0),
+        "sh_rest": np.concatenate([_pad_sh_rest(frame.get("sh_rest"), frame["n_vertices"], target_k) for frame in frames], axis=0),
+        "sh_degree": int(target_degree),
+        "n_vertices": n_vertices,
+    }
+
+
+def _static_frame_from_state() -> Dict[str, Any]:
+    return {key: STATE[key] for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "sh_degree", "n_vertices")}
+
+
+def _remove_static_indices_from_parts(indices: List[int]) -> None:
+    for part in STATE["parts"].values():
+        if not part.get("is_4dgs", False):
+            part.get("vertex_indices", set()).difference_update(indices)
+
+
+def _refresh_static_part_pivot(pid: int) -> List[float]:
+    part = STATE["parts"][pid]
+    indices = sorted(part.get("vertex_indices", set()))
+    if not indices or STATE["xyz"] is None:
+        raise ValueError("Part has no static vertices")
+    pivot = np.mean(STATE["xyz"][indices], axis=0).astype(float).tolist()
+    part["pivot"] = pivot
+    return pivot
+
+
+def _valid_static_indices(raw_indices: Any) -> List[int]:
+    if not isinstance(raw_indices, list):
+        raise ValueError("vertex_indices must be a list")
+    if STATE["n_vertices"] <= 0:
+        return []
+    return sorted({int(index) for index in raw_indices if 0 <= int(index) < STATE["n_vertices"]})
 
 
 def _key_rotation(key: Dict[str, float]) -> Tuple[np.ndarray, np.ndarray]:
@@ -431,16 +532,21 @@ def api_frame(frame): return jsonify(frame_payload(max(0, min(frame, STATE["num_
 
 @app.post("/api/upload")
 def api_upload():
-    files = request.files.getlist("files")
+    files = request.files.getlist("file")
+    if not files:
+        files = request.files.getlist("files")  # Compatibility with the existing browser UI.
     if not files: return jsonify({"error": "没有收到文件"}), 400
     parsed_files = []
+    upload_dir = tempfile.mkdtemp(prefix="upload_", dir=UPLOAD_ROOT)
     try:
         for uploaded in files:
-            data = uploaded.read()
-            ext = os.path.splitext(uploaded.filename)[1].lower()
+            filename = os.path.basename(uploaded.filename or "")
+            ext = os.path.splitext(filename)[1].lower()
             if ext not in (".ply", ".pt"):
                 continue
-            parsed_files.append((uploaded.filename, load_ply_bytes(data) if ext == ".ply" else load_pt_bytes(data)))
+            upload_path = os.path.join(upload_dir, filename)
+            uploaded.save(upload_path)
+            parsed_files.append((filename, load_ply(upload_path) if ext == ".ply" else load_pt(upload_path)))
     except Exception as exc: return jsonify({"error": str(exc)}), 400
     if not parsed_files: return jsonify({"error": "没有有效的 .ply 或 .pt 文件"}), 400
     first = parsed_files[0][0]
@@ -450,18 +556,16 @@ def api_upload():
     parsed["scales"] = np.concatenate([p["scales"] for _, p in parsed_files], axis=0)
     parsed["opacities"] = np.concatenate([p["opacities"] for _, p in parsed_files], axis=0)
     parsed["sh0"] = np.concatenate([p["sh0"] for _, p in parsed_files], axis=0)
-    rest_shapes = [p["sh_rest"].shape[1:] for _, p in parsed_files if p["sh_rest"] is not None]
-    if len(rest_shapes) == len(parsed_files) and len(set(rest_shapes)) == 1:
-        parsed["sh_rest"] = np.concatenate([p["sh_rest"] for _, p in parsed_files], axis=0)
-    else:
-        parsed["sh_rest"] = None
     parsed["sh_degree"] = max(p["sh_degree"] for _, p in parsed_files)
+    parsed["sh_rest"] = np.concatenate([_pad_sh_rest(p.get("sh_rest"), p["n_vertices"], max(0, (parsed["sh_degree"] + 1) ** 2 - 1)) for _, p in parsed_files], axis=0)
     parsed["n_vertices"] = len(parsed["xyz"])
     with STATE_LOCK:
+        _reset_workspace()
         for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest"): STATE[key] = parsed[key]
         STATE["sh_degree"], STATE["n_vertices"], STATE["filename"], STATE["loaded"] = parsed["sh_degree"], parsed["n_vertices"], first, True
         STATE["part_id_array"] = np.full(parsed["n_vertices"], -1, dtype=np.int32); STATE["parts"].clear(); STATE["tracks"].clear(); STATE["4dgs_parts"].clear(); STATE["next_part_id"] = 0
         offset = 0
+        parts_created = []
         for filename, source in parsed_files:
             count = source["n_vertices"]
             pid = STATE["next_part_id"]; STATE["next_part_id"] += 1
@@ -470,8 +574,251 @@ def api_upload():
                                     "pivot": np.mean(parsed["xyz"][offset:offset + count], axis=0).tolist() if count else [0, 0, 0],
                                     "vertex_indices": indices}
             STATE["part_id_array"][list(indices)] = pid
+            STATE["tracks"][pid] = []
+            parts_created.append(_serialize_part(pid, STATE["parts"][pid]))
             offset += count
-    return jsonify(state_summary())
+    return jsonify({"ok": True, "filename": STATE["filename"], "n_vertices": STATE["n_vertices"],
+                    "sh_degree": STATE["sh_degree"], "parts_created": parts_created, "n_files": len(parsed_files)})
+
+def _load_uploaded_pointclouds(uploaded_files) -> List[Tuple[str, Dict[str, Any]]]:
+    """Save incoming files under the temporary upload root and load canonical point clouds."""
+    upload_dir = tempfile.mkdtemp(prefix="upload_", dir=UPLOAD_ROOT)
+    parsed_files = []
+    for sequence, uploaded in enumerate(uploaded_files):
+        filename = os.path.basename(uploaded.filename or "")
+        extension = os.path.splitext(filename)[1].lower()
+        if not filename or extension not in (".ply", ".pt"):
+            raise ValueError(f"Unsupported file type: {filename or '<unnamed>'}")
+        saved_name = filename if not os.path.exists(os.path.join(upload_dir, filename)) else f"{sequence}_{filename}"
+        saved_path = os.path.join(upload_dir, saved_name)
+        uploaded.save(saved_path)
+        parsed_files.append((filename, load_ply(saved_path) if extension == ".ply" else load_pt(saved_path)))
+    if not parsed_files:
+        raise ValueError("No .ply or .pt files were provided")
+    return parsed_files
+
+
+@app.post("/api/upload_append")
+def api_upload_append():
+    files = request.files.getlist("file")
+    if not files:
+        files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files were provided"}), 400
+    try:
+        parsed_files = _load_uploaded_pointclouds(files)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    with STATE_LOCK:
+        if not STATE["loaded"] or STATE["xyz"] is None:
+            return jsonify({"error": "Upload a base point cloud before appending"}), 400
+        previous_count = int(STATE["n_vertices"])
+        target_degree = max([int(STATE["sh_degree"])] + [int(source["sh_degree"]) for _, source in parsed_files])
+        combined = _combine_static_frames([_static_frame_from_state()] + [source for _, source in parsed_files], target_degree)
+        for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest"):
+            STATE[key] = combined[key]
+        STATE["n_vertices"] = combined["n_vertices"]
+        STATE["sh_degree"] = target_degree
+        old_ids = STATE["part_id_array"] if STATE["part_id_array"] is not None else np.full(previous_count, -1, dtype=np.int32)
+        STATE["part_id_array"] = np.concatenate((old_ids.astype(np.int32, copy=False), np.full(combined["n_vertices"] - previous_count, -1, dtype=np.int32)))
+        parts_created = []
+        offset = previous_count
+        for filename, source in parsed_files:
+            count = int(source["n_vertices"])
+            pid = STATE["next_part_id"]
+            STATE["next_part_id"] += 1
+            indices = set(range(offset, offset + count))
+            STATE["parts"][pid] = {"name": os.path.splitext(filename)[0], "color": _color_for(pid),
+                                    "pivot": np.mean(STATE["xyz"][offset:offset + count], axis=0).tolist() if count else [0, 0, 0],
+                                    "vertex_indices": indices}
+            if indices:
+                STATE["part_id_array"][list(indices)] = pid
+            STATE["tracks"][pid] = []
+            parts_created.append(_serialize_part(pid, STATE["parts"][pid]))
+            offset += count
+    return jsonify({"ok": True, "n_vertices_added": combined["n_vertices"] - previous_count,
+                    "n_vertices": combined["n_vertices"], "sh_degree": target_degree,
+                    "parts_created": parts_created, "n_files": len(parsed_files)})
+
+
+@app.post("/api/upload_4dgs")
+def api_upload_4dgs():
+    body = request.get_json(silent=True) or {}
+    dir_path = body.get("dir_path")
+    if not isinstance(dir_path, str) or not dir_path:
+        return jsonify({"error": "dir_path is required"}), 400
+    try:
+        source = load_4dgs_dir(dir_path)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    with STATE_LOCK:
+        if STATE["xyz"] is None:
+            _empty_static_arrays()
+        source_degree = int(source["sh_degree"])
+        workspace_degree = max(int(STATE["sh_degree"]), source_degree)
+        _normalise_static_sh_degree(workspace_degree)
+        target_k = max(0, (workspace_degree + 1) ** 2 - 1)
+        for source_frame in source["frames"]:
+            source_frame["sh_rest"] = _pad_sh_rest(source_frame.get("sh_rest"), source_frame["n_vertices"], target_k)
+            source_frame["sh_degree"] = workspace_degree
+        pid = STATE["next_part_id"]
+        STATE["next_part_id"] += 1
+        first_frame = source["frames"][0]
+        STATE["parts"][pid] = {"name": str(body.get("name") or f"4DGS Part {pid}"), "color": _color_for(pid),
+                                "pivot": np.mean(first_frame["xyz"], axis=0).tolist() if first_frame["n_vertices"] else [0, 0, 0],
+                                "vertex_indices": set(), "is_4dgs": True}
+        STATE["4dgs_parts"][pid] = {**source, "sh_degree": workspace_degree, "loop": bool(body.get("loop", False))}
+        STATE["tracks"][pid] = []
+        STATE["sh_degree"] = workspace_degree
+        STATE["loaded"] = True
+        if not STATE["filename"]:
+            STATE["filename"] = os.path.basename(os.path.normpath(dir_path))
+        part_payload = _serialize_part(pid, STATE["parts"][pid])
+    return jsonify({"ok": True, "part": part_payload, "n_frames_src": source["n_frames_src"],
+                    "n_vertices": first_frame["n_vertices"], "filenames": source["filenames"]})
+
+
+@app.get("/api/pointcloud")
+def api_pointcloud():
+    try:
+        frame = max(0, int(request.args.get("frame", "0")))
+    except ValueError:
+        return jsonify({"error": "frame must be an integer"}), 400
+    with STATE_LOCK:
+        static_xyz = STATE["xyz"] if STATE["xyz"] is not None else np.zeros((0, 3), dtype=np.float64)
+        static_sh0 = STATE["sh0"] if STATE["sh0"] is not None else np.zeros((0, 3), dtype=np.float64)
+        static_ids = STATE["part_id_array"] if STATE["part_id_array"] is not None else np.full(len(static_xyz), -1, dtype=np.int32)
+        xyz_chunks = [np.asarray(static_xyz, dtype=np.float64)]
+        color_chunks = [sh_to_rgb(static_sh0)]
+        id_chunks = [np.asarray(static_ids, dtype=np.int32)]
+        for pid, part in STATE["parts"].items():
+            if not part.get("is_4dgs", False):
+                continue
+            info = STATE["4dgs_parts"].get(pid)
+            if not info or not info.get("frames"):
+                continue
+            source_frame = info["frames"][_get_4dgs_frame_idx(pid, frame)]
+            count = int(source_frame["n_vertices"])
+            xyz_chunks.append(np.asarray(source_frame["xyz"], dtype=np.float64))
+            color_chunks.append(np.tile(np.asarray(part["color"], dtype=np.float64), (count, 1)))
+            id_chunks.append(np.full(count, pid, dtype=np.int32))
+        xyz = np.concatenate(xyz_chunks, axis=0)
+        colors = np.concatenate(color_chunks, axis=0)
+        part_ids = np.concatenate(id_chunks, axis=0)
+        for pid, part in STATE["parts"].items():
+            if not part.get("is_4dgs", False):
+                colors[part_ids == pid] = np.asarray(part["color"], dtype=np.float64)
+    buf = io.BytesIO()
+    buf.write(struct.pack("<I", len(xyz)))
+    buf.write(xyz.astype(np.float32).tobytes())
+    buf.write(colors.astype(np.float32).tobytes())
+    buf.write(part_ids.astype("<i4", copy=False).tobytes())
+    buf.seek(0)
+    return Response(buf.read(), mimetype="application/octet-stream")
+
+
+@app.get("/api/parts")
+def api_parts():
+    with STATE_LOCK:
+        return jsonify({"parts": [_serialize_part(pid, part) for pid, part in STATE["parts"].items()]})
+
+
+@app.post("/api/parts")
+def api_create_part_v2():
+    body = request.get_json(silent=True) or {}
+    with STATE_LOCK:
+        if not STATE["loaded"] or STATE["xyz"] is None:
+            return jsonify({"error": "Upload a point cloud before creating a Part"}), 400
+        try:
+            indices = _valid_static_indices(body.get("vertex_indices", []))
+        except (TypeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        pid = STATE["next_part_id"]
+        STATE["next_part_id"] += 1
+        _remove_static_indices_from_parts(indices)
+        pivot = np.mean(STATE["xyz"][indices], axis=0).tolist() if indices else [0, 0, 0]
+        STATE["parts"][pid] = {"name": str(body.get("name") or f"Part {pid}"), "color": _color_for(pid),
+                                "pivot": pivot, "vertex_indices": set(indices)}
+        STATE["part_id_array"][indices] = pid
+        STATE["tracks"][pid] = []
+        return jsonify({"ok": True, "part": _serialize_part(pid, STATE["parts"][pid])}), 201
+
+
+@app.put("/api/parts/<int:pid>")
+def api_update_part_v2(pid):
+    body = request.get_json(silent=True) or {}
+    with STATE_LOCK:
+        part = STATE["parts"].get(pid)
+        if part is None:
+            return jsonify({"error": "Part not found"}), 404
+        try:
+            if "name" in body:
+                part["name"] = str(body["name"])
+            for field in ("pivot", "color"):
+                if field in body:
+                    values = body[field]
+                    if not isinstance(values, list) or len(values) != 3:
+                        raise ValueError(f"{field} must contain exactly three values")
+                    part[field] = [float(value) for value in values]
+        except (TypeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "part": _serialize_part(pid, part)})
+
+
+@app.delete("/api/parts/<int:pid>")
+def api_delete_part_v2(pid):
+    with STATE_LOCK:
+        part = STATE["parts"].get(pid)
+        if part is None:
+            return jsonify({"error": "Part not found"}), 404
+        if part.get("is_4dgs", False):
+            STATE["4dgs_parts"].pop(pid, None)
+        else:
+            indices = sorted(part.get("vertex_indices", set()))
+            if indices and STATE["part_id_array"] is not None:
+                STATE["part_id_array"][indices] = -1
+        STATE["parts"].pop(pid, None)
+        STATE["tracks"].pop(pid, None)
+        return jsonify({"ok": True, "deleted_part_id": pid})
+
+
+@app.post("/api/parts/<int:pid>/assign")
+def api_assign_part_v2(pid):
+    body = request.get_json(silent=True) or {}
+    with STATE_LOCK:
+        part = STATE["parts"].get(pid)
+        if part is None:
+            return jsonify({"error": "Part not found"}), 404
+        if part.get("is_4dgs", False):
+            return jsonify({"error": "Static vertices cannot be assigned to a 4DGS Part"}), 400
+        try:
+            indices = _valid_static_indices(body.get("vertex_indices", []))
+        except (TypeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        _remove_static_indices_from_parts(indices)
+        part["vertex_indices"].update(indices)
+        STATE["part_id_array"][indices] = pid
+        try:
+            _refresh_static_part_pivot(pid)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "part": _serialize_part(pid, part)})
+
+
+@app.get("/api/parts/<int:pid>/centroid")
+def api_part_centroid_v2(pid):
+    with STATE_LOCK:
+        part = STATE["parts"].get(pid)
+        if part is None:
+            return jsonify({"error": "Part not found"}), 404
+        if part.get("is_4dgs", False):
+            return jsonify({"error": "A 4DGS Part has no static vertices for centroid calculation"}), 400
+        try:
+            pivot = _refresh_static_part_pivot(pid)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "pivot": pivot, "part": _serialize_part(pid, part)})
+
 
 @app.post("/api/create-part")
 def api_create_part():

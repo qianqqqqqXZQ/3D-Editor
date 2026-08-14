@@ -8,11 +8,11 @@
 
 ## Current Request: Color Handling and HTTP API Contract (2026-08-14)
 
-- [ ] Add the specified SH-to-RGB conversion and fixed Part color palette.
-- [ ] Implement compliant initial and append point-cloud uploads, including SH-degree padding.
-- [ ] Implement server-directory 4DGS upload and 4DGS/static state initialization.
-- [ ] Implement binary point-cloud payload and REST-style Part management APIs.
-- [ ] Run compilation plus API regression coverage, review the changed code, then update this checklist.
+- [x] Add the specified SH-to-RGB conversion and fixed Part color palette.
+- [x] Implement compliant initial and append point-cloud uploads, including SH-degree padding.
+- [x] Implement server-directory 4DGS upload and 4DGS/static state initialization.
+- [x] Implement binary point-cloud payload and REST-style Part management APIs.
+- [x] Run compilation plus API regression coverage, review the changed code, then update this checklist.
 
 ## Run
 
