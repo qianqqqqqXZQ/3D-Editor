@@ -42,3 +42,18 @@ py -3.13 -m py_compile app.py
 - `py -3.13 -m py_compile app.py`
 - Flask test-client regression for initial/append uploads, SH normalization, REST Part and keyframe operations, static/4DGS binary payloads, settings, and both export paths.
 - Browser checks at desktop and `390x844` mobile viewports: Three.js canvas rendered, controls appeared in their responsive layout, and no console errors were reported.
+
+## Current Request: Project Documentation (2026-08-15)
+
+- [x] Create a Git checkpoint before documentation changes.
+- [x] Rewrite the root README with an English-first language switch and a Chinese translation.
+- [x] Document the current structure, Quick Start, workflow, supported data, API entry points, Background, and Acknowledgements.
+- [x] Synchronize `project-work/agents.md` with the active static editor and run a documentation/code review.
+- [x] Run compilation and repository checks after the documentation changes.
+
+2026-08-15 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Flask test client `GET /` check confirming the active `static/editor.html` page is served.
+- Explicit UTF-8 README section checks for both language sections and required headings.
+- `git diff --check`

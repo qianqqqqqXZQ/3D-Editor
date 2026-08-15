@@ -2,18 +2,26 @@
 
 ## Overview
 
-This is a single-file Flask and Three.js Part-Level 4DGS Animation Editor. Backend state,
-parsing, animation, export, and API routes are in `app.py`; the browser UI is embedded in
-`HTML_PAGE` in the same file.
+This is a Flask and Three.js Part-Level 4DGS Animation Editor. Backend state, parsing,
+animation, export, and API routes are in `app.py`; the active browser UI is
+`static/editor.html`. `app.py` still contains a legacy embedded `HTML_PAGE` fallback, but
+the root route serves the static editor when it is present.
 
 ## Layout
 
+- `README.md`: English-first project documentation with a Chinese language section.
 - `app.py`: Flask application, `STATE`, PLY/PT readers, Part/keyframe/4DGS APIs, and fallback UI.
 - `static/`: local Three.js r128 and OrbitControls assets.
 - `static/editor.html`: active Three.js editor, binary point-cloud parser, immutable source-position preview, and responsive controls.
 - `generated/`: exported PT frames and archives.
 - `project-work/`: maintained planning and project-reference documents.
 - `requirements.txt`: Flask, NumPy, plyfile, and PyTorch dependencies.
+
+Documentation conventions:
+
+- Keep planning/reference notes in `project-work/`.
+- Keep generated exports in `generated/`.
+- Keep the English README section first; link to the Chinese section with the language selector at the top.
 
 ## Run And Test
 
