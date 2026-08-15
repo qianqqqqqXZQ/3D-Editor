@@ -8,8 +8,9 @@ parsing, animation, export, and API routes are in `app.py`; the browser UI is em
 
 ## Layout
 
-- `app.py`: Flask application, `STATE`, PLY/PT readers, Part/keyframe/4DGS APIs, and UI.
+- `app.py`: Flask application, `STATE`, PLY/PT readers, Part/keyframe/4DGS APIs, and fallback UI.
 - `static/`: local Three.js r128 and OrbitControls assets.
+- `static/editor.html`: active Three.js editor, binary point-cloud parser, immutable source-position preview, and responsive controls.
 - `generated/`: exported PT frames and archives.
 - `project-work/`: maintained planning and project-reference documents.
 - `requirements.txt`: Flask, NumPy, plyfile, and PyTorch dependencies.
@@ -32,3 +33,10 @@ point clouds use global arrays plus `part_id_array`, while source 4DGS frames ar
 `STATE['4dgs_parts']`. `GET /api/pointcloud` is intentionally source-data-only: it does not
 apply keyframe transforms, emits little-endian count/xyz/rgb/part-id arrays, and colors unassigned
 static points from SH DC. Verify this work using Flask's test client and in-memory PLY/PT fixtures.
+
+## API Contract Notes (2026-08-15)
+
+- `GET /api/frame/<frame>` emits `count + xyz` for static-only workspaces and adds RGB plus Part ids when a 4DGS Part exists. Keyframe preview transforms remain client-side.
+- `POST /api/export` serializes in a background thread using `export_active`, `export_progress`, and `export_done`; `POST /api/export_current` applies Part transforms before writing a `.pt` file.
+- Static vertices unassigned after Part deletion remain in point-cloud and export data with SH-derived display colors.
+- Verification is the compile command plus the Flask-client regression and browser desktop/mobile checks recorded in `plans.md`.

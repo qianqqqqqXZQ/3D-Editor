@@ -349,6 +349,10 @@ def _color_for(pid: int) -> List[float]:
     return list(PART_COLORS[pid % len(PART_COLORS)])
 
 
+def _workspace_has_data() -> bool:
+    return int(STATE.get("n_vertices", 0)) > 0 or bool(STATE.get("4dgs_parts"))
+
+
 def _empty_static_arrays() -> None:
     """Initialise the static arrays so a 4DGS-only workspace remains well-formed."""
     STATE["xyz"] = np.zeros((0, 3), dtype=np.float64)
@@ -482,9 +486,7 @@ def compute_frame_data(frame: int) -> Tuple[np.ndarray, np.ndarray]:
 
 def compute_full_frame_data(frame: int, apply_transforms: bool = True) -> Dict[str, Any]:
     """Build one frame, padding SH rest coefficients across all sources."""
-    data = frame_data(frame) if apply_transforms else frame_data(0)
-    if not apply_transforms:
-        data["xyz"], data["quats"] = compute_frame_data(0)
+    data = frame_data(frame, apply_transforms=apply_transforms)
     max_degree = max(int(data.get("sh_degree", 0)), 0); target_k = max(0, (max_degree + 1) ** 2 - 1)
     data["sh_rest"] = _pad_sh_rest(data.get("sh_rest"), len(data["xyz"]), target_k)
     data["sh_degree"] = max_degree; data["n_vertices"] = len(data["xyz"]); data["part_id_array"] = data.get("part_ids")
@@ -494,6 +496,7 @@ def compute_full_frame_data(frame: int, apply_transforms: bool = True) -> Dict[s
 def frame_data(frame: int, apply_transforms: bool = True) -> Dict[str, Any]:
     with STATE_LOCK:
         xyzs, quats, scales, opacities, sh0s, rests, cols, ids, source_indices = [], [], [], [], [], [], [], [], []
+        claimed_static = np.zeros(int(STATE.get("n_vertices", 0)), dtype=bool)
         for pid, part in STATE["parts"].items():
             if part.get("is_4dgs"):
                 info = STATE["4dgs_parts"].get(pid); src = info["frames"][_get_4dgs_frame_idx(pid, frame)] if info and info["frames"] else None
@@ -502,6 +505,7 @@ def frame_data(frame: int, apply_transforms: bool = True) -> Dict[str, Any]:
             else:
                 idx = sorted(part.get("vertex_indices", set()))
                 if not idx or STATE["xyz"] is None: continue
+                claimed_static[idx] = True
                 src = {k: STATE[k][idx] if k != "sh_rest" and STATE[k] is not None else (STATE[k][idx] if STATE[k] is not None else None)
                        for k in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest")}
                 src["sh_degree"] = STATE["sh_degree"]
@@ -510,6 +514,19 @@ def frame_data(frame: int, apply_transforms: bool = True) -> Dict[str, Any]:
             scales.append(src["scales"]); opacities.append(src["opacities"]); sh0s.append(src["sh0"])
             rests.append(src.get("sh_rest")); cols.append(np.tile(part["color"], (len(src["xyz"]), 1))); ids.append(np.full(len(src["xyz"]), pid))
             source_indices.append(np.asarray(idx, dtype=np.int32) if idx is not None else np.full(len(src["xyz"]), -1))
+        # Deleted or never-assigned static vertices remain part of the point cloud.
+        # Keep them in frame/export responses with their source SH-derived color.
+        if STATE["xyz"] is not None and len(claimed_static):
+            unassigned = np.flatnonzero(~claimed_static)
+            if len(unassigned):
+                src = {k: STATE[k][unassigned] if STATE[k] is not None else None
+                       for k in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest")}
+                src["sh_degree"] = STATE["sh_degree"]
+                identity = {"tx": 0.0, "ty": 0.0, "tz": 0.0, "rx": 0.0, "ry": 0.0, "rz": 0.0}
+                xyzs.append(_transform_xyz(src["xyz"], [0.0, 0.0, 0.0], identity) if apply_transforms else src["xyz"])
+                quats.append(src["quats"]); scales.append(src["scales"]); opacities.append(src["opacities"])
+                sh0s.append(src["sh0"]); rests.append(src.get("sh_rest")); cols.append(sh_to_rgb(src["sh0"]))
+                ids.append(np.full(len(unassigned), -1, dtype=np.int32)); source_indices.append(unassigned.astype(np.int32))
         if not xyzs:
             return {"xyz": np.zeros((0,3)), "quats": np.zeros((0,4)), "scales": np.zeros((0,3)), "opacities": np.zeros(0),
                     "sh0": np.zeros((0,3)), "sh_rest": None, "sh_degree": 0, "colors": np.zeros((0,3)), "part_ids": np.zeros(0, dtype=np.int32), "source_indices": np.zeros(0, dtype=np.int32), "frame": frame}
@@ -527,8 +544,36 @@ def frame_payload(frame: int) -> Dict[str, Any]:
             "part_ids": data["part_ids"].astype(int).tolist(), "source_indices": data["source_indices"].astype(int).tolist(), "frame": frame}
 
 
+def _raw_pointcloud_arrays(frame: int = 0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return source positions, display colors, and Part ids without keyframe transforms."""
+    static_xyz = np.asarray(STATE["xyz"], dtype=np.float64) if STATE["xyz"] is not None else np.zeros((0, 3), dtype=np.float64)
+    static_sh0 = np.asarray(STATE["sh0"], dtype=np.float64) if STATE["sh0"] is not None else np.zeros((len(static_xyz), 3), dtype=np.float64)
+    static_ids = np.asarray(STATE["part_id_array"], dtype=np.int32) if STATE["part_id_array"] is not None else np.full(len(static_xyz), -1, dtype=np.int32)
+    colors = sh_to_rgb(static_sh0)
+    if len(colors) != len(static_xyz):
+        colors = np.zeros((len(static_xyz), 3), dtype=np.float64)
+    xyz_chunks, color_chunks, id_chunks = [static_xyz], [colors], [static_ids]
+    for pid, part in STATE["parts"].items():
+        if not part.get("is_4dgs", False):
+            continue
+        info = STATE["4dgs_parts"].get(pid)
+        if not info or not info.get("frames"):
+            continue
+        source_frame = info["frames"][_get_4dgs_frame_idx(pid, frame)]
+        count = int(source_frame["n_vertices"])
+        xyz_chunks.append(np.asarray(source_frame["xyz"], dtype=np.float64))
+        color_chunks.append(np.tile(np.asarray(part["color"], dtype=np.float64), (count, 1)))
+        id_chunks.append(np.full(count, pid, dtype=np.int32))
+    return np.concatenate(xyz_chunks, axis=0), np.concatenate(color_chunks, axis=0), np.concatenate(id_chunks, axis=0)
+
+
 @app.get("/")
-def index(): return HTML_PAGE
+def index():
+    editor_path = os.path.join(BASE_DIR, "static", "editor.html")
+    if os.path.isfile(editor_path):
+        with open(editor_path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    return HTML_PAGE
 
 @app.get("/api/state")
 def api_state(): return jsonify(state_summary())
@@ -538,17 +583,15 @@ def api_frame(frame):
     """Return an untransformed frame in the legacy/static or full 4DGS binary format."""
     with STATE_LOCK:
         frame = max(0, min(int(frame), max(0, STATE["num_frames"] - 1)))
-        data = frame_data(frame, apply_transforms=False)
+        xyz, colors, part_ids = _raw_pointcloud_arrays(frame)
         has_4dgs = bool(STATE["4dgs_parts"])
     buf = io.BytesIO()
-    xyz = np.asarray(data["xyz"], dtype=np.float32)
-    buf.write(struct.pack("<I", len(xyz)))
-    buf.write(xyz.tobytes())
+    xyz = np.asarray(xyz, dtype="<f4")
+    buf.write(struct.pack("<I", int(len(xyz))))
+    buf.write(xyz.tobytes(order="C"))
     if has_4dgs:
-        colors = np.asarray(data.get("colors", np.zeros((len(xyz), 3))), dtype=np.float32)
-        part_ids = np.asarray(data.get("part_ids", np.full(len(xyz), -1)), dtype="<i4")
-        buf.write(colors.tobytes())
-        buf.write(part_ids.tobytes())
+        buf.write(np.asarray(colors, dtype="<f4").tobytes(order="C"))
+        buf.write(np.asarray(part_ids, dtype="<i4").tobytes(order="C"))
     return Response(buf.getvalue(), mimetype="application/octet-stream")
 
 @app.post("/api/upload")
@@ -706,34 +749,15 @@ def api_pointcloud():
     except ValueError:
         return jsonify({"error": "frame must be an integer"}), 400
     with STATE_LOCK:
-        static_xyz = STATE["xyz"] if STATE["xyz"] is not None else np.zeros((0, 3), dtype=np.float64)
-        static_sh0 = STATE["sh0"] if STATE["sh0"] is not None else np.zeros((0, 3), dtype=np.float64)
-        static_ids = STATE["part_id_array"] if STATE["part_id_array"] is not None else np.full(len(static_xyz), -1, dtype=np.int32)
-        xyz_chunks = [np.asarray(static_xyz, dtype=np.float64)]
-        color_chunks = [sh_to_rgb(static_sh0)]
-        id_chunks = [np.asarray(static_ids, dtype=np.int32)]
-        for pid, part in STATE["parts"].items():
-            if not part.get("is_4dgs", False):
-                continue
-            info = STATE["4dgs_parts"].get(pid)
-            if not info or not info.get("frames"):
-                continue
-            source_frame = info["frames"][_get_4dgs_frame_idx(pid, frame)]
-            count = int(source_frame["n_vertices"])
-            xyz_chunks.append(np.asarray(source_frame["xyz"], dtype=np.float64))
-            color_chunks.append(np.tile(np.asarray(part["color"], dtype=np.float64), (count, 1)))
-            id_chunks.append(np.full(count, pid, dtype=np.int32))
-        xyz = np.concatenate(xyz_chunks, axis=0)
-        colors = np.concatenate(color_chunks, axis=0)
-        part_ids = np.concatenate(id_chunks, axis=0)
+        xyz, colors, part_ids = _raw_pointcloud_arrays(frame)
         for pid, part in STATE["parts"].items():
             if not part.get("is_4dgs", False):
                 colors[part_ids == pid] = np.asarray(part["color"], dtype=np.float64)
     buf = io.BytesIO()
-    buf.write(struct.pack("<I", len(xyz)))
-    buf.write(xyz.astype(np.float32).tobytes())
-    buf.write(colors.astype(np.float32).tobytes())
-    buf.write(part_ids.astype("<i4", copy=False).tobytes())
+    buf.write(struct.pack("<I", int(len(xyz))))
+    buf.write(np.asarray(xyz, dtype="<f4").tobytes(order="C"))
+    buf.write(np.asarray(colors, dtype="<f4").tobytes(order="C"))
+    buf.write(np.asarray(part_ids, dtype="<i4").tobytes(order="C"))
     buf.seek(0)
     return Response(buf.read(), mimetype="application/octet-stream")
 
@@ -780,7 +804,12 @@ def api_update_part_v2(pid):
                     values = body[field]
                     if not isinstance(values, list) or len(values) != 3:
                         raise ValueError(f"{field} must contain exactly three values")
-                    part[field] = [float(value) for value in values]
+                    parsed = [float(value) for value in values]
+                    if not all(math.isfinite(value) for value in parsed):
+                        raise ValueError(f"{field} values must be finite")
+                    if field == "color" and not all(0.0 <= value <= 1.0 for value in parsed):
+                        raise ValueError("color values must be in the range [0, 1]")
+                    part[field] = parsed
         except (TypeError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"ok": True, "part": _serialize_part(pid, part)})
@@ -800,6 +829,7 @@ def api_delete_part_v2(pid):
                 STATE["part_id_array"][indices] = -1
         STATE["parts"].pop(pid, None)
         STATE["tracks"].pop(pid, None)
+        STATE["loaded"] = _workspace_has_data()
         return jsonify({"ok": True, "deleted_part_id": pid})
 
 
@@ -845,7 +875,10 @@ def _clean_keyframe(body: Dict[str, Any], frame_default: int = 0) -> Dict[str, A
     """Validate and normalize the public keyframe representation."""
     frame = int(body.get("frame", frame_default))
     frame = max(0, min(frame, max(0, int(STATE["num_frames"]) - 1)))
-    return {"frame": frame, **{name: float(body.get(name, 0.0)) for name in ("tx", "ty", "tz", "rx", "ry", "rz")}}
+    values = {name: float(body.get(name, 0.0)) for name in ("tx", "ty", "tz", "rx", "ry", "rz")}
+    if not all(math.isfinite(value) for value in values.values()):
+        raise ValueError("transform values must be finite")
+    return {"frame": frame, **values}
 
 
 @app.get("/api/keyframes/<int:pid>")
@@ -939,7 +972,7 @@ def api_export():
     if not isinstance(output_dir, str) or not output_dir.strip():
         return jsonify({"error": "output_dir is required"}), 400
     with STATE_LOCK:
-        if not STATE["loaded"] or (STATE["xyz"] is None and not STATE["4dgs_parts"]):
+        if not STATE["loaded"] or not _workspace_has_data():
             return jsonify({"error": "No point-cloud data is loaded"}), 400
         if STATE.get("export_active", False):
             return jsonify({"error": "An export is already in progress"}), 409
@@ -991,7 +1024,7 @@ def api_export_current_v2():
     except (TypeError, ValueError):
         return jsonify({"error": "frame must be an integer"}), 400
     with STATE_LOCK:
-        if not STATE["loaded"] or (STATE["xyz"] is None and not STATE["4dgs_parts"]):
+        if not STATE["loaded"] or not _workspace_has_data():
             return jsonify({"error": "No point-cloud data is loaded"}), 400
         frame = max(0, min(frame, max(0, STATE["num_frames"] - 1)))
         output_path = output_path if output_path.lower().endswith(".pt") else output_path + ".pt"
