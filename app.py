@@ -65,6 +65,8 @@ STATE: Dict[str, Any] = {
     "interpolation_method": "linear",
     "export_progress": -1,
     "export_dir": None,
+    "export_done": False,
+    "export_active": False,
     "4dgs_parts": {},
 }
 STATE_LOCK = threading.RLock()
@@ -304,7 +306,7 @@ def interpolate_keyframes(keyframes: list, frame: int, method: str = "linear") -
     hi = next(i for i, k in enumerate(keys) if k.get("frame", 0) >= frame); a, b = keys[hi-1], keys[hi]; t = (frame-a["frame"]) / max(1, b["frame"]-a["frame"])
     result = {"frame": frame}
     for k in names:
-        if method == "catmull-rom" and k in ("tx", "ty", "tz") and len(keys) >= 2:
+        if method in ("catmull_rom", "catmull-rom") and k in ("tx", "ty", "tz") and len(keys) >= 2:
             p0, p3 = keys[max(0, hi-2)], keys[min(len(keys)-1, hi+1)]; v0,v1,v2,v3 = [float(x.get(k,0)) for x in (p0,a,b,p3)]
             result[k] = .5*((2*v1)+(-v0+v2)*t+(2*v0-5*v1+4*v2-v3)*t*t+(-v0+3*v1-3*v2+v3)*t*t*t)
         else: result[k] = float(lerp(a.get(k,0), b.get(k,0), t))
@@ -322,9 +324,11 @@ def _apply_transform_to_data(xyz, quats, pivot, tf):
 
 
 def _serialize_part(pid: int, part: Dict[str, Any]) -> Dict[str, Any]:
-    n_vertices = len(part.get("vertex_indices", set()))
+    indices = sorted(int(index) for index in part.get("vertex_indices", set()))
+    n_vertices = len(indices)
     payload = {"id": pid, "name": part["name"], "color": part["color"], "pivot": part["pivot"],
-               "count": n_vertices, "n_vertices": n_vertices, "is_4dgs": bool(part.get("is_4dgs", False))}
+               "count": n_vertices, "n_vertices": n_vertices, "vertex_indices": indices,
+               "is_4dgs": bool(part.get("is_4dgs", False))}
     if payload["is_4dgs"]:
         info = STATE["4dgs_parts"].get(pid, {})
         payload.update({"n_frames_src": int(info.get("n_frames_src", 0)), "loop": bool(info.get("loop", False))})
@@ -334,6 +338,7 @@ def _serialize_part(pid: int, part: Dict[str, Any]) -> Dict[str, Any]:
 def state_summary() -> Dict[str, Any]:
     with STATE_LOCK:
         return {"loaded": STATE["loaded"], "filename": STATE["filename"], "n_vertices": STATE["n_vertices"],
+                "sh_degree": int(STATE.get("sh_degree", 0)),
                 "num_frames": STATE["num_frames"], "interpolation_method": STATE["interpolation_method"],
                 "export_progress": STATE["export_progress"], "parts": [_serialize_part(k, v) for k, v in STATE["parts"].items()],
                 "tracks": {str(k): v for k, v in STATE["tracks"].items()},
@@ -363,7 +368,8 @@ def _reset_workspace() -> None:
         "loaded": False, "filename": "", "n_vertices": 0, "xyz": None, "quats": None,
         "scales": None, "opacities": None, "sh0": None, "sh_rest": None, "sh_degree": 0,
         "part_id_array": None, "parts": {}, "next_part_id": 0, "tracks": {}, "num_frames": 30,
-        "interpolation_method": "linear", "export_progress": -1, "export_dir": None, "4dgs_parts": {},
+        "interpolation_method": "linear", "export_progress": -1, "export_dir": None,
+        "export_done": False, "export_active": False, "4dgs_parts": {},
     })
 
 
@@ -485,7 +491,7 @@ def compute_full_frame_data(frame: int, apply_transforms: bool = True) -> Dict[s
     return data
 
 
-def frame_data(frame: int) -> Dict[str, Any]:
+def frame_data(frame: int, apply_transforms: bool = True) -> Dict[str, Any]:
     with STATE_LOCK:
         xyzs, quats, scales, opacities, sh0s, rests, cols, ids, source_indices = [], [], [], [], [], [], [], [], []
         for pid, part in STATE["parts"].items():
@@ -499,7 +505,7 @@ def frame_data(frame: int) -> Dict[str, Any]:
                 src = {k: STATE[k][idx] if k != "sh_rest" and STATE[k] is not None else (STATE[k][idx] if STATE[k] is not None else None)
                        for k in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest")}
                 src["sh_degree"] = STATE["sh_degree"]
-            key = _key_for(pid, frame)
+            key = _key_for(pid, frame) if apply_transforms else {"tx": 0.0, "ty": 0.0, "tz": 0.0, "rx": 0.0, "ry": 0.0, "rz": 0.0}
             xyzs.append(_transform_xyz(src["xyz"], part["pivot"], key)); quats.append(_rotate_quats(src["quats"], key))
             scales.append(src["scales"]); opacities.append(src["opacities"]); sh0s.append(src["sh0"])
             rests.append(src.get("sh_rest")); cols.append(np.tile(part["color"], (len(src["xyz"]), 1))); ids.append(np.full(len(src["xyz"]), pid))
@@ -528,7 +534,22 @@ def index(): return HTML_PAGE
 def api_state(): return jsonify(state_summary())
 
 @app.get("/api/frame/<int:frame>")
-def api_frame(frame): return jsonify(frame_payload(max(0, min(frame, STATE["num_frames"] - 1))))
+def api_frame(frame):
+    """Return an untransformed frame in the legacy/static or full 4DGS binary format."""
+    with STATE_LOCK:
+        frame = max(0, min(int(frame), max(0, STATE["num_frames"] - 1)))
+        data = frame_data(frame, apply_transforms=False)
+        has_4dgs = bool(STATE["4dgs_parts"])
+    buf = io.BytesIO()
+    xyz = np.asarray(data["xyz"], dtype=np.float32)
+    buf.write(struct.pack("<I", len(xyz)))
+    buf.write(xyz.tobytes())
+    if has_4dgs:
+        colors = np.asarray(data.get("colors", np.zeros((len(xyz), 3))), dtype=np.float32)
+        part_ids = np.asarray(data.get("part_ids", np.full(len(xyz), -1)), dtype="<i4")
+        buf.write(colors.tobytes())
+        buf.write(part_ids.tobytes())
+    return Response(buf.getvalue(), mimetype="application/octet-stream")
 
 @app.post("/api/upload")
 def api_upload():
@@ -543,7 +564,7 @@ def api_upload():
             filename = os.path.basename(uploaded.filename or "")
             ext = os.path.splitext(filename)[1].lower()
             if ext not in (".ply", ".pt"):
-                continue
+                return jsonify({"error": f"Unsupported file type: {filename or '<unnamed>'}"}), 400
             upload_path = os.path.join(upload_dir, filename)
             uploaded.save(upload_path)
             parsed_files.append((filename, load_ply(upload_path) if ext == ".ply" else load_pt(upload_path)))
@@ -610,7 +631,7 @@ def api_upload_append():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
     with STATE_LOCK:
-        if not STATE["loaded"] or STATE["xyz"] is None:
+        if not STATE["loaded"] or STATE["xyz"] is None or int(STATE.get("n_vertices", 0)) <= 0:
             return jsonify({"error": "Upload a base point cloud before appending"}), 400
         previous_count = int(STATE["n_vertices"])
         target_degree = max([int(STATE["sh_degree"])] + [int(source["sh_degree"]) for _, source in parsed_files])
@@ -820,6 +841,170 @@ def api_part_centroid_v2(pid):
         return jsonify({"ok": True, "pivot": pivot, "part": _serialize_part(pid, part)})
 
 
+def _clean_keyframe(body: Dict[str, Any], frame_default: int = 0) -> Dict[str, Any]:
+    """Validate and normalize the public keyframe representation."""
+    frame = int(body.get("frame", frame_default))
+    frame = max(0, min(frame, max(0, int(STATE["num_frames"]) - 1)))
+    return {"frame": frame, **{name: float(body.get(name, 0.0)) for name in ("tx", "ty", "tz", "rx", "ry", "rz")}}
+
+
+@app.get("/api/keyframes/<int:pid>")
+def api_get_keyframes(pid):
+    with STATE_LOCK:
+        if pid not in STATE["parts"]:
+            return jsonify({"error": "Part not found"}), 404
+        return jsonify({"pid": pid, "keyframes": sorted(STATE["tracks"].get(pid, []), key=lambda key: key["frame"])})
+
+
+@app.post("/api/keyframes/<int:pid>")
+def api_put_keyframe(pid):
+    body = request.get_json(silent=True) or {}
+    with STATE_LOCK:
+        if pid not in STATE["parts"]:
+            return jsonify({"error": "Part not found"}), 404
+        try:
+            key = _clean_keyframe(body)
+        except (TypeError, ValueError, OverflowError) as exc:
+            return jsonify({"error": f"Invalid keyframe: {exc}"}), 400
+        keys = [item for item in STATE["tracks"].get(pid, []) if int(item.get("frame", -1)) != key["frame"]]
+        keys.append(key)
+        STATE["tracks"][pid] = sorted(keys, key=lambda item: item["frame"])
+        return jsonify({"ok": True, "pid": pid, "keyframes": STATE["tracks"][pid]})
+
+
+@app.delete("/api/keyframes/<int:pid>/<int:frame>")
+def api_delete_keyframe(pid, frame):
+    with STATE_LOCK:
+        if pid not in STATE["parts"]:
+            return jsonify({"error": "Part not found"}), 404
+        keys = STATE["tracks"].get(pid, [])
+        if not any(int(item.get("frame", -1)) == frame for item in keys):
+            return jsonify({"error": "Keyframe not found"}), 404
+        STATE["tracks"][pid] = [item for item in keys if int(item.get("frame", -1)) != frame]
+        return jsonify({"ok": True, "pid": pid, "keyframes": STATE["tracks"][pid]})
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    with STATE_LOCK:
+        return jsonify({"num_frames": int(STATE["num_frames"]), "interpolation_method": STATE["interpolation_method"]})
+
+
+def _update_settings(body: Dict[str, Any]):
+    try:
+        num_frames = int(body.get("num_frames", STATE["num_frames"]))
+    except (TypeError, ValueError):
+        return "num_frames must be an integer"
+    if num_frames < 2:
+        return "num_frames must be at least 2"
+    if num_frames > 10000:
+        return "num_frames must be at most 10000"
+    method = body.get("interpolation_method", STATE["interpolation_method"])
+    if method not in ("linear", "catmull_rom", "catmull-rom"):
+        return "interpolation_method must be linear or catmull_rom"
+    STATE["num_frames"] = num_frames
+    STATE["interpolation_method"] = "catmull_rom" if method in ("catmull_rom", "catmull-rom") else "linear"
+    return None
+
+
+@app.put("/api/settings")
+def api_put_settings():
+    body = request.get_json(silent=True) or {}
+    with STATE_LOCK:
+        error = _update_settings(body)
+        if error:
+            return jsonify({"error": error}), 400
+        return jsonify({"ok": True, "num_frames": STATE["num_frames"], "interpolation_method": STATE["interpolation_method"]})
+
+
+@app.get("/api/frame_transforms/<int:frame>")
+def api_frame_transforms(frame):
+    with STATE_LOCK:
+        clamped = max(0, min(int(frame), max(0, STATE["num_frames"] - 1)))
+        payload = {str(pid): {name: float(_key_for(pid, clamped).get(name, 0.0))
+                              for name in ("tx", "ty", "tz", "rx", "ry", "rz")}
+                    for pid in STATE["parts"]}
+    return jsonify(payload)
+
+
+def _export_frame_payload(frame: int) -> Dict[str, Any]:
+    """Build one exportable frame, including 4DGS attributes when present."""
+    return compute_full_frame_data(frame, apply_transforms=True)
+
+
+@app.post("/api/export")
+def api_export():
+    body = request.get_json(silent=True) or {}
+    output_dir = body.get("output_dir")
+    if not isinstance(output_dir, str) or not output_dir.strip():
+        return jsonify({"error": "output_dir is required"}), 400
+    with STATE_LOCK:
+        if not STATE["loaded"] or (STATE["xyz"] is None and not STATE["4dgs_parts"]):
+            return jsonify({"error": "No point-cloud data is loaded"}), 400
+        if STATE.get("export_active", False):
+            return jsonify({"error": "An export is already in progress"}), 409
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError as exc:
+            return jsonify({"error": str(exc)}), 400
+        frame_count = int(STATE["num_frames"])
+        STATE["export_active"] = True
+        STATE["export_done"] = False
+        STATE["export_progress"] = 0
+        STATE["export_dir"] = os.path.abspath(output_dir)
+
+    def worker():
+        try:
+            for index in range(frame_count):
+                payload = _export_frame_payload(index)
+                _write_pt(os.path.join(output_dir, f"frame_{index:04d}.pt"), payload)
+                with STATE_LOCK:
+                    STATE["export_progress"] = int((index + 1) * 100 / max(1, frame_count))
+        except Exception:
+            with STATE_LOCK:
+                STATE["export_progress"] = -1
+        finally:
+            with STATE_LOCK:
+                STATE["export_active"] = False
+                STATE["export_done"] = STATE["export_progress"] == 100
+
+    threading.Thread(target=worker, daemon=True, name="4dgs-export").start()
+    return jsonify({"ok": True, "num_frames": frame_count, "output_dir": os.path.abspath(output_dir)})
+
+
+@app.get("/api/export/status")
+def api_export_status():
+    with STATE_LOCK:
+        return jsonify({"progress": int(STATE.get("export_progress", -1)),
+                        "done": bool(STATE.get("export_done", False)),
+                        "output_dir": STATE.get("export_dir")})
+
+
+@app.post("/api/export_current")
+def api_export_current_v2():
+    body = request.get_json(silent=True) or {}
+    output_path = body.get("output_path")
+    if not isinstance(output_path, str) or not output_path.strip():
+        return jsonify({"error": "output_path is required"}), 400
+    try:
+        frame = int(body.get("frame", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "frame must be an integer"}), 400
+    with STATE_LOCK:
+        if not STATE["loaded"] or (STATE["xyz"] is None and not STATE["4dgs_parts"]):
+            return jsonify({"error": "No point-cloud data is loaded"}), 400
+        frame = max(0, min(frame, max(0, STATE["num_frames"] - 1)))
+        output_path = output_path if output_path.lower().endswith(".pt") else output_path + ".pt"
+        output_path = os.path.abspath(output_path)
+        try:
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            payload = _export_frame_payload(frame)
+            _write_pt(output_path, payload)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "output_path": output_path, "n_vertices": int(payload["n_vertices"]), "frame": frame})
+
+
 @app.post("/api/create-part")
 def api_create_part():
     body = request.get_json(force=True); indices = sorted(set(int(i) for i in body.get("indices", [])))
@@ -860,10 +1045,11 @@ def api_keyframes():
 
 @app.post("/api/settings")
 def api_settings():
-    body = request.get_json(force=True)
+    body = request.get_json(silent=True) or {}
     with STATE_LOCK:
-        STATE["num_frames"] = max(1, min(10000, int(body.get("num_frames", STATE["num_frames"]))))
-        STATE["interpolation_method"] = body.get("interpolation_method", STATE["interpolation_method"])
+        error = _update_settings(body)
+        if error:
+            return jsonify({"error": error}), 400
     return jsonify(state_summary())
 
 @app.post("/api/import-4dgs")
@@ -936,8 +1122,7 @@ HTML_PAGE = r'''<!doctype html>
 <style>
 :root{--bg:#0b1020;--panel:#121a2b;--panel2:#18233a;--line:#273650;--text:#e7edf7;--muted:#8fa1bf;--accent:#43b7ff;--good:#48d597;--danger:#ff6b6b}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;overflow:hidden}button,input,select{font:inherit;color:inherit}button{border:1px solid var(--line);background:#1c2a43;padding:8px 11px;border-radius:5px;cursor:pointer}button:hover{border-color:var(--accent);background:#233856}.app{height:100vh;display:grid;grid-template-columns:280px 1fr 320px;grid-template-rows:58px 1fr 190px}.top{grid-column:1/-1;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;padding:0 18px;background:#0f1729}.brand{font-weight:700;letter-spacing:.3px;font-size:16px}.status{color:var(--muted);font-size:12px}.toolbar{margin-left:auto;display:flex;gap:8px}.side{background:var(--panel);padding:14px;border-right:1px solid var(--line);overflow:auto}.right{background:var(--panel);padding:14px;border-left:1px solid var(--line);overflow:auto}.section{border-bottom:1px solid var(--line);padding-bottom:15px;margin-bottom:15px}.section h3{margin:0 0 10px;font-size:13px;color:#c3d1e8}.row{display:flex;gap:7px;align-items:center;margin:7px 0}.row>*{min-width:0}.grow{flex:1}.small{font-size:12px;color:var(--muted)}input[type=text],input[type=number],select{width:100%;background:#0c1425;border:1px solid var(--line);border-radius:4px;padding:7px}.file{width:100%;border:1px dashed #385071;padding:10px;border-radius:5px}.part{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid transparent;border-radius:5px;cursor:pointer}.part:hover,.part.active{background:var(--panel2);border-color:var(--line)}.swatch{width:11px;height:11px;border-radius:50%}.viewport{position:relative;min-width:0;background:#080d18}.viewport canvas{display:block;width:100%;height:100%}.hint{position:absolute;left:14px;top:12px;color:var(--muted);font-size:12px;pointer-events:none}.selection{position:absolute;border:1px dashed var(--accent);background:rgba(67,183,255,.12);pointer-events:none;display:none}.timeline{grid-column:1/-1;border-top:1px solid var(--line);background:#0f1729;padding:12px 18px;display:flex;flex-direction:column;gap:10px}.timeline-head{display:flex;align-items:center;gap:10px}.timeline-head input{width:80px}.track{height:36px;position:relative;background:#0b1220;border:1px solid var(--line);border-radius:4px}.ticks{display:flex;justify-content:space-between;color:var(--muted);font-size:10px;padding:3px 5px}.key{position:absolute;top:17px;width:9px;height:9px;background:var(--accent);transform:translateX(-50%) rotate(45deg)}.playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--danger);transform:translateX(-50%)}.kv{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.kv label{font-size:11px;color:var(--muted)}.kv input{margin-top:2px}.log{font-size:12px;color:var(--muted);white-space:pre-wrap;max-height:80px;overflow:auto}
 @media(max-width:1000px){.app{grid-template-columns:220px 1fr;grid-template-rows:58px 1fr 190px}.right{display:none}}
-</style></head><body><div class="app"><header class="top"><div class="brand">Part-Level 4DGS Animation Editor</div><div id="status" class="status">未加载点云</div><div class="toolbar"><button id="uploadBtn">上传 PLY / PT</button><button id="importBtn">导入 4DGS 帧</button><button id="exportCurrent">导出当前帧</button><button id="exportAll">导出全部帧</button></div></header>
-<aside class="side"><div class="section"><h3>数据</h3><input id="fileInput" class="file" type="file" multiple accept=".ply,.pt"><input id="frameInput" class="file" type="file" multiple accept=".pt" webkitdirectory directory style="display:none"><div id="progress" class="small"></div></div><div class="section"><h3>Parts</h3><div id="parts"></div><button id="newPart" style="width:100%;margin-top:8px">从选区创建 Part</button></div><div class="section"><h3>视图</h3><div class="row"><label class="grow">点大小 <input id="pointSize" type="range" min="1" max="12" step=".5" value="3"></label></div><div class="row"><button id="resetView" class="grow">重置视角</button><button id="clearSelection">清除选区</button></div></div><div class="section"><h3>日志</h3><div id="log" class="log"></div></div></aside>
+<aside class="side"><div class="section"><h3>Data</h3><input id="fileInput" class="file" type="file" multiple accept=".ply,.pt"><input id="appendInput" class="file" type="file" multiple accept=".ply,.pt" style="display:none"><input id="frameInput" class="file" type="file" multiple accept=".pt" webkitdirectory directory style="display:none"><div id="progress" class="small"></div></div><div class="section"><h3>Parts</h3><div id="parts"></div><div class="row"><button id="newPart" class="grow">Create Part</button><button id="deletePart">Delete</button></div></div><div class="section"><h3>Viewport</h3><div class="row"><label class="grow">Point size <input id="pointSize" type="range" min="1" max="12" step=".5" value="3"></label></div><div class="row"><button id="resetView" class="grow">Reset View</button><button id="clearSelection">Clear</button></div></div><div class="section"><h3>Log</h3><div id="log" class="log"></div></div></aside>
 <main id="viewport" class="viewport"><div class="hint">拖拽矩形框选点 · 左键旋转 · 右键平移 · 滚轮缩放</div><div id="selection" class="selection"></div></main>
 <aside class="right"><div class="section"><h3>Part 属性</h3><div class="row"><label class="grow small">名称<input id="partName" type="text"></label></div><div class="small">Pivot</div><div class="kv"><label>X<input id="px" type="number" step=".01"></label><label>Y<input id="py" type="number" step=".01"></label><label>Z<input id="pz" type="number" step=".01"></label></div><button id="savePart" style="margin-top:8px;width:100%">保存属性</button></div><div class="section"><h3>关键帧</h3><div class="row"><label class="grow small">帧<input id="kfFrame" type="number" min="0" value="0"></label><button id="addKey">添加/更新关键帧</button></div><div class="small">平移</div><div class="kv"><label>X<input id="tx" type="number" step=".01" value="0"></label><label>Y<input id="ty" type="number" step=".01" value="0"></label><label>Z<input id="tz" type="number" step=".01" value="0"></label></div><div class="small" style="margin-top:8px">旋转 (弧度)</div><div class="kv"><label>X<input id="rx" type="number" step=".01" value="0"></label><label>Y<input id="ry" type="number" step=".01" value="0"></label><label>Z<input id="rz" type="number" step=".01" value="0"></label></div><div id="keyList" class="small" style="margin-top:8px"></div></div><div class="section"><h3>动画设置</h3><div class="row"><label class="grow small">总帧数<input id="numFrames" type="number" min="1" max="10000" value="30"></label><label class="grow small">插值<select id="interp"><option value="linear">Linear</option><option value="catmull-rom">Catmull-Rom</option></select></label></div><button id="saveSettings" style="width:100%">应用设置</button></div></aside>
 <section class="timeline"><div class="timeline-head"><button id="play">播放</button><button id="stop">停止</button><span>当前帧</span><input id="currentFrame" type="number" min="0" value="0"><input id="scrub" class="grow" type="range" min="0" max="29" value="0"><span id="frameLabel" class="small">0 / 29</span></div><div id="track" class="track"><div class="ticks"><span>0</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div><div id="playhead" class="playhead" style="left:0%"></div></div></section></div>

@@ -14,6 +14,14 @@
 - [x] Implement binary point-cloud payload and REST-style Part management APIs.
 - [x] Run compilation plus API regression coverage, review the changed code, then update this checklist.
 
+## Current Request: Complete HTTP API and Editor Contract (2026-08-15)
+
+- [x] Create a Git checkpoint before the implementation changes.
+- [ ] Complete REST-style keyframe, settings, frame, export, and current-export endpoints.
+- [ ] Correct binary frame/point-cloud payloads and state/export concurrency behavior.
+- [ ] Update the embedded editor UI to expose the requested upload, selection, transform, timeline, and modal workflows.
+- [ ] Run compile/tests and perform a focused code review, then record verification results here.
+
 ## Run
 
 ```powershell
