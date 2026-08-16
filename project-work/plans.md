@@ -73,3 +73,9 @@ py -3.13 -m py_compile app.py
 - [x] Reproduce the black viewport with a real uploaded `.pt` file and inspect the rendered canvas.
 - [x] Identify the cause as `PointsMaterial.sizeAttenuation` interpreting the default point size as world units.
 - [x] Render point sizes in pixels with `sizeAttenuation: false` and verify the grid/points at desktop and mobile viewport sizes.
+
+## Bugfix: axis-line flicker (2026-08-16)
+
+- [x] Replace the thin `AxesHelper` with thicker red/green/blue cylinder axes.
+- [x] Disable depth testing and depth writes for the axes to prevent grid z-fighting at the origin.
+- [x] Verify the empty editor viewport visually and confirm no browser console errors.

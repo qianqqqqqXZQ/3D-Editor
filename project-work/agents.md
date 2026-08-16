@@ -60,3 +60,4 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 ## Rendering Bugfix Notes (2026-08-16)
 
 - Point-cloud `PointsMaterial` uses `sizeAttenuation: false`. The UI point-size slider is a pixel-size control; enabling attenuation here made the default value `3` world units and produced giant black point sprites that covered the viewport.
+- Coordinate axes are rendered by `addThickAxes()` as red, green, and blue cylinders with `depthTest: false`, which keeps them stable over the grid and avoids origin z-fighting.
