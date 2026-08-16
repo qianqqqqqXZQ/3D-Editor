@@ -84,7 +84,7 @@ Use `/data/frames` as the server directory in the editor's **4DGS Dir** dialog.
 
 1. Click **Upload** and choose one or more `.ply` or `.pt` files. The first upload replaces the current workspace; **Add Files** appends to it and creates Parts for the new files.
 2. Choose **Select**, drag a rectangle in the viewport, and click **Create Part**. Select a Part in the left panel to edit its name, color, or pivot.
-3. Enter translation and rotation values in the **Transform** panel. Rotation values are in radians. Set a keyframe at the current timeline frame.
+3. Enter translation and rotation values in the **Transform** panel. Translation uses world units and rotation sliders use degrees (the API stores radians). Set a keyframe at the current timeline frame.
 4. Change the frame number or press **Play** to inspect interpolated motion. Use **4DGS Dir** to add a server-side `.pt` frame sequence as a dynamic Part.
 5. Use **Export Cur .pt** for one transformed frame or **Export All** for every timeline frame. The output path can be inside `generated/` or another writable directory.
 

@@ -48,3 +48,11 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 - `POST /api/export` serializes in a background thread using `export_active`, `export_progress`, and `export_done`; `POST /api/export_current` applies Part transforms before writing a `.pt` file.
 - Static vertices unassigned after Part deletion remain in point-cloud and export data with SH-derived display colors.
 - Verification is the compile command plus the Flask-client regression and browser desktop/mobile checks recorded in `plans.md`.
+
+## Frontend Contract Notes (2026-08-16)
+
+- `static/editor.html` is the only active UI. It uses local Three.js r128 and OrbitControls files and never loads a CDN.
+- `originalPositions` is immutable source geometry for every preview pass. `previewAllTransforms()` applies the active Part's degree-based slider values (converted to radians) and `/api/frame_transforms/<frame>` values to each Part using the same ZYX matrix as `app.py`.
+- `setupSelectionEvents`, `onMouseDown`, `onMouseMove`, `onMouseUp`, and `performBoxSelect` implement Orbit/Select modes. Box selection projects displayed positions with `projectionMatrix * matrixWorldInverse`, rejects points behind/outside the clip volume, and supports Shift additive selection.
+- 4DGS playback uses `/api/frame/<frame>` for variable-point source frames; static playback uses `/api/pointcloud?frame=<frame>`. Both are followed by `/api/frame_transforms/<frame>` and a fresh immutable preview.
+- Exported checkpoints contain top-level `means`, `quats`, `scales`, `opacities`, `sh0`, `shN`, and `sh_degree`, plus a nested `splats` object for compatibility.

@@ -57,3 +57,13 @@ py -3.13 -m py_compile app.py
 - Flask test client `GET /` check confirming the active `static/editor.html` page is served.
 - Explicit UTF-8 README section checks for both language sections and required headings.
 - `git diff --check`
+
+## Current Request: Frontend transform, selection, timeline, and export contract (2026-08-16)
+
+- [x] Create a recoverable Git checkpoint before the implementation changes.
+- [x] Replace the active editor UI with explicit Orbit/Select modes, crosshair box selection, Shift additive selection, yellow selected points, and clip-space projection checks.
+- [x] Implement immutable `originalPositions` preview with ZYX Euler rotation, per-Part backend transforms, active slider override, and translation-only Pivot marker motion.
+- [x] Implement Part loading/list rendering, 4DGS labels, Pivot editing/centroid reset, degree-based transform sliders, keyframe operations, per-Part timeline markers, and 20 FPS playback.
+- [x] Connect static and 4DGS frame endpoints, background export polling, and visible fetch error handling to the local Three.js r128 assets.
+- [x] Enforce unloaded-workspace 400 responses for frame/point-cloud/transform endpoints and expose exported `.pt` fields at top level plus nested `splats` compatibility.
+- [x] Run JavaScript syntax, Python compilation, Flask API regression, 4DGS variable-point/export regression, startup HTTP, and `git diff --check` verification.

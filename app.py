@@ -218,7 +218,9 @@ def save_frame_as_pt(xyz, quats, scales, opacities, sh0, sh_rest, sh_degree, fil
         splats["shN"] = torch.zeros((n, 0, 3), dtype=torch.float32)
     else:
         splats["shN"] = torch.from_numpy(np.asarray(sh_rest).reshape(n, -1, 3).astype(np.float32))
-    torch.save({"splats": splats, "sh_degree": int(sh_degree)}, filepath)
+    # Keep the canonical nested gsplat payload and expose the same fields at
+    # the top level so exported checkpoints are directly torch.load()-friendly.
+    torch.save({**splats, "splats": splats, "sh_degree": int(sh_degree)}, filepath)
 
 
 def _pad_sh_rest(rest, n, target_k):
@@ -331,7 +333,10 @@ def _serialize_part(pid: int, part: Dict[str, Any]) -> Dict[str, Any]:
                "is_4dgs": bool(part.get("is_4dgs", False))}
     if payload["is_4dgs"]:
         info = STATE["4dgs_parts"].get(pid, {})
-        payload.update({"n_frames_src": int(info.get("n_frames_src", 0)), "loop": bool(info.get("loop", False))})
+        frames = info.get("frames") or []
+        current_count = int(frames[0].get("n_vertices", 0)) if frames else 0
+        payload.update({"n_frames_src": int(info.get("n_frames_src", 0)), "loop": bool(info.get("loop", False)),
+                       "n_vertices": current_count})
     return payload
 
 
@@ -582,6 +587,8 @@ def api_state(): return jsonify(state_summary())
 def api_frame(frame):
     """Return an untransformed frame in the legacy/static or full 4DGS binary format."""
     with STATE_LOCK:
+        if not _workspace_has_data():
+            return jsonify({"error": "No point-cloud data is loaded"}), 400
         frame = max(0, min(int(frame), max(0, STATE["num_frames"] - 1)))
         xyz, colors, part_ids = _raw_pointcloud_arrays(frame)
         has_4dgs = bool(STATE["4dgs_parts"])
@@ -749,6 +756,8 @@ def api_pointcloud():
     except ValueError:
         return jsonify({"error": "frame must be an integer"}), 400
     with STATE_LOCK:
+        if not _workspace_has_data():
+            return jsonify({"error": "No point-cloud data is loaded"}), 400
         xyz, colors, part_ids = _raw_pointcloud_arrays(frame)
         for pid, part in STATE["parts"].items():
             if not part.get("is_4dgs", False):
@@ -953,6 +962,8 @@ def api_put_settings():
 @app.get("/api/frame_transforms/<int:frame>")
 def api_frame_transforms(frame):
     with STATE_LOCK:
+        if not _workspace_has_data():
+            return jsonify({"error": "No point-cloud data is loaded"}), 400
         clamped = max(0, min(int(frame), max(0, STATE["num_frames"] - 1)))
         payload = {str(pid): {name: float(_key_for(pid, clamped).get(name, 0.0))
                               for name in ("tx", "ty", "tz", "rx", "ry", "rz")}
