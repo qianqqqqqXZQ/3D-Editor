@@ -67,3 +67,9 @@ py -3.13 -m py_compile app.py
 - [x] Connect static and 4DGS frame endpoints, background export polling, and visible fetch error handling to the local Three.js r128 assets.
 - [x] Enforce unloaded-workspace 400 responses for frame/point-cloud/transform endpoints and expose exported `.pt` fields at top level plus nested `splats` compatibility.
 - [x] Run JavaScript syntax, Python compilation, Flask API regression, 4DGS variable-point/export regression, startup HTTP, and `git diff --check` verification.
+
+## Bugfix: black viewport on initial point-cloud render (2026-08-16)
+
+- [x] Reproduce the black viewport with a real uploaded `.pt` file and inspect the rendered canvas.
+- [x] Identify the cause as `PointsMaterial.sizeAttenuation` interpreting the default point size as world units.
+- [x] Render point sizes in pixels with `sizeAttenuation: false` and verify the grid/points at desktop and mobile viewport sizes.
