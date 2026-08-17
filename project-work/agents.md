@@ -61,3 +61,9 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 
 - Point-cloud `PointsMaterial` uses `sizeAttenuation: false`. The UI point-size slider is a pixel-size control; enabling attenuation here made the default value `3` world units and produced giant black point sprites that covered the viewport.
 - Coordinate axes are rendered by `addThickAxes()` as red, green, and blue cylinders with `depthTest: false`, which keeps them stable over the grid and avoids origin z-fighting.
+
+## Deployment Architecture (2026-08-17)
+
+- Vercel is a frontend/CDN target for this project, not the runtime for the stateful Flask editor API. The public UI can be deployed there, while the Python API must run in a persistent container service with writable ephemeral storage and a production WSGI server.
+- Public deployment must not permit untrusted `.pt` uploads: `torch.load(..., weights_only=False)` is intentionally retained for trusted local workflows but is unsafe for anonymous input. Public mode should accept `.ply` only.
+- The current `STATE` object is process-global. Public mode must assign a signed workspace identifier to each browser and store each workspace independently; never rely on a single global editor state for concurrent users.
