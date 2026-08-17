@@ -80,26 +80,6 @@ docker run --rm -p 5011:5011 -v /path/to/frames:/data/frames 3d-editor
 
 Use `/data/frames` as the server directory in the editor's **4DGS Dir** dialog.
 
-### Public Deployment: Vercel Frontend + Container API
-
-Do not deploy `app.py` as a Vercel Function. Vercel Functions limit request and response bodies to 4.5 MB, use ephemeral execution, and cannot safely host this editor's large uploads, in-memory workspaces, or PyTorch exports. The included deployment files use Vercel for the static browser UI and a single persistent container instance for the Flask API.
-
-1. Deploy this repository's `Dockerfile` to a container host such as Render, Railway, or Fly.io. Keep exactly one application replica and one Gunicorn worker: workspace state is intentionally temporary and held in that process.
-2. Set the backend environment variables below, replacing the origin with the final Vercel production domain.
-3. Import the same repository into Vercel. Set `EDITOR_API_ORIGIN` to the HTTPS backend origin, with no trailing slash, then deploy. The Vercel build writes that value to `static/runtime-config.js`; browsers send large uploads directly to the API rather than through Vercel.
-
-| Backend variable | Public value | Purpose |
-| --- | --- | --- |
-| `PUBLIC_MODE` | `true` | Enables public upload/export restrictions and secure cookies. |
-| `FRONTEND_ORIGIN` | `https://your-project.vercel.app` | Allows credentialed requests only from your Vercel site. |
-| `MAX_UPLOAD_MB` | `50` | Total upload request limit. Choose a value appropriate for backend memory. |
-| `MAX_SINGLE_FILE_MB` | `50` | Per-file upload limit. |
-| `MAX_POINT_COUNT` | `1000000` | Maximum points in an uploaded/combined workspace. |
-| `MAX_PT_UNCOMPRESSED_MB` | `200` | Maximum decompressed contents of a public PT ZIP checkpoint. |
-| `WORKSPACE_TTL_SECONDS` | `3600` | Lifetime of inactive browser workspaces and their export files. |
-
-Public mode accepts `.ply` and tensor-only `.pt` checkpoints. PT checkpoints must use PyTorch's ZIP format, fit the compressed and decompressed limits, and are loaded with `weights_only=True`; files containing arbitrary Python objects are rejected instead of unpickled. Server-side 4DGS directory imports remain disabled for public users. Every browser receives a separate temporary workspace token stored in session storage, with an HttpOnly Cookie as a same-origin fallback. This avoids relying on third-party cookies when a Vercel domain calls a different API domain. Users can export their own generated PT files, and the browser downloads them directly. Restarting or scaling the API service clears in-memory workspaces, so use one backend replica unless a shared workspace store is added.
-
 ### Basic Workflow
 
 1. Click **Upload** and choose one or more `.ply` or `.pt` files. The first upload replaces the current workspace; **Add Files** appends to it and creates Parts for the new files.

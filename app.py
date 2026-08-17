@@ -2,21 +2,16 @@ import io
 import json
 import math
 import os
-import re
 import shutil
 import struct
 import tempfile
 import threading
-import time
 import zipfile
-from contextvars import ContextVar
-from collections.abc import MutableMapping
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from secrets import token_urlsafe
 
 import numpy as np
-from flask import Flask, Response, g, jsonify, request, send_file
+from flask import Flask, Response, jsonify, request, send_file
 
 try:
     import torch
@@ -32,14 +27,8 @@ except Exception:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPORT_ROOT = os.path.join(BASE_DIR, "generated")
 os.makedirs(EXPORT_ROOT, exist_ok=True)
-PUBLIC_MODE = os.environ.get("PUBLIC_MODE", "").lower() in {"1", "true", "yes"}
-MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "50" if PUBLIC_MODE else "400"))
-MAX_SINGLE_FILE_MB = int(os.environ.get("MAX_SINGLE_FILE_MB", str(MAX_UPLOAD_MB)))
-MAX_POINT_COUNT = int(os.environ.get("MAX_POINT_COUNT", "1000000" if PUBLIC_MODE else "5000000"))
-MAX_PT_UNCOMPRESSED_MB = int(os.environ.get("MAX_PT_UNCOMPRESSED_MB", "200" if PUBLIC_MODE else "1024"))
-WORKSPACE_TTL_SECONDS = int(os.environ.get("WORKSPACE_TTL_SECONDS", "3600"))
-WORKSPACE_COOKIE = "editor_workspace"
-FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "").rstrip("/")
+UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "part_level_4dgs_uploads")
+os.makedirs(UPLOAD_ROOT, exist_ok=True)
 
 PART_COLORS = [
     [0.9, 0.2, 0.2],
@@ -55,102 +44,32 @@ PART_COLORS = [
 C0 = 0.28209479177387814
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
-app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 400 * 1024 * 1024
 
-def _new_workspace_state() -> Dict[str, Any]:
-    return {
-        "loaded": False, "filename": "", "n_vertices": 0, "xyz": None, "quats": None,
-        "scales": None, "opacities": None, "sh0": None, "sh_rest": None, "sh_degree": 0,
-        "part_id_array": None, "parts": {}, "next_part_id": 0, "tracks": {}, "num_frames": 30,
-        "interpolation_method": "linear", "export_progress": -1, "export_dir": None,
-        "export_done": False, "export_active": False, "4dgs_parts": {},
-    }
-
-
-_WORKSPACE_ID: ContextVar[Optional[str]] = ContextVar("workspace_id", default=None)
-_WORKSPACES: Dict[str, Dict[str, Any]] = {}
-_FALLBACK_STATE = _new_workspace_state()
-
-
-class _WorkspaceState(MutableMapping):
-    """Mapping facade that resolves STATE to the current browser workspace."""
-
-    def _data(self) -> Dict[str, Any]:
-        workspace_id = _WORKSPACE_ID.get()
-        if workspace_id is None:
-            return _FALLBACK_STATE
-        workspace = _WORKSPACES.get(workspace_id)
-        if workspace is None:
-            workspace = {"state": _new_workspace_state(), "last_access": time.monotonic()}
-            _WORKSPACES[workspace_id] = workspace
-        workspace["last_access"] = time.monotonic()
-        return workspace["state"]
-
-    def __getitem__(self, key): return self._data()[key]
-    def __setitem__(self, key, value): self._data()[key] = value
-    def __delitem__(self, key): del self._data()[key]
-    def __iter__(self): return iter(self._data())
-    def __len__(self): return len(self._data())
-    def clear(self): self._data().clear()
-
-
-STATE: MutableMapping = _WorkspaceState()
+STATE: Dict[str, Any] = {
+    "loaded": False,
+    "filename": "",
+    "n_vertices": 0,
+    "xyz": None,
+    "quats": None,
+    "scales": None,
+    "opacities": None,
+    "sh0": None,
+    "sh_rest": None,
+    "sh_degree": 0,
+    "part_id_array": None,
+    "parts": {},
+    "next_part_id": 0,
+    "tracks": {},
+    "num_frames": 30,
+    "interpolation_method": "linear",
+    "export_progress": -1,
+    "export_dir": None,
+    "export_done": False,
+    "export_active": False,
+    "4dgs_parts": {},
+}
 STATE_LOCK = threading.RLock()
-
-
-def _workspace_export_root(workspace_id: Optional[str] = None) -> str:
-    workspace_id = workspace_id or _WORKSPACE_ID.get()
-    if not workspace_id:
-        return EXPORT_ROOT
-    return os.path.join(EXPORT_ROOT, workspace_id)
-
-
-def _cleanup_expired_workspaces() -> None:
-    now = time.monotonic()
-    expired = [wid for wid, workspace in _WORKSPACES.items()
-               if now - float(workspace["last_access"]) > WORKSPACE_TTL_SECONDS]
-    for workspace_id in expired:
-        _WORKSPACES.pop(workspace_id, None)
-        shutil.rmtree(_workspace_export_root(workspace_id), ignore_errors=True)
-
-
-@app.before_request
-def _select_workspace() -> None:
-    if request.path.startswith("/static/"):
-        return
-    workspace_id = request.headers.get("X-Workspace-ID") or request.cookies.get(WORKSPACE_COOKIE)
-    if workspace_id and not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", workspace_id):
-        workspace_id = None
-    if not workspace_id or workspace_id not in _WORKSPACES:
-        workspace_id = token_urlsafe(32)
-        g.new_workspace = True
-    _WORKSPACE_ID.set(workspace_id)
-    with STATE_LOCK:
-        _cleanup_expired_workspaces()
-        if workspace_id not in _WORKSPACES:
-            _WORKSPACES[workspace_id] = {"state": _new_workspace_state(), "last_access": time.monotonic()}
-
-
-@app.after_request
-def _secure_public_response(response):
-    if request.path.startswith("/api/"):
-        response.headers["Cache-Control"] = "no-store"
-    origin = request.headers.get("Origin", "").rstrip("/")
-    if FRONTEND_ORIGIN and origin == FRONTEND_ORIGIN:
-        response.headers["Access-Control-Allow-Origin"] = FRONTEND_ORIGIN
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Workspace-ID"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        response.headers["Vary"] = "Origin"
-    if getattr(g, "new_workspace", False):
-        response.set_cookie(WORKSPACE_COOKIE, _WORKSPACE_ID.get() or "", max_age=WORKSPACE_TTL_SECONDS,
-                            httponly=True, secure=PUBLIC_MODE, samesite="None" if FRONTEND_ORIGIN else "Lax")
-    return response
-
-
-@app.route("/api/<path:_path>", methods=["OPTIONS"])
-def api_preflight(_path: str):
-    return Response(status=204)
 
 
 def _arr(value: Any, shape: Tuple[int, ...], default: float = 0.0) -> np.ndarray:
@@ -210,7 +129,6 @@ def _normalise_frame(obj: Any) -> Dict[str, Any]:
 
 
 def load_ply_bytes(data: bytes) -> Dict[str, Any]:
-    _validate_ply_payload(data)
     if PlyData is None:
         raise RuntimeError("plyfile is required to read PLY files. Install with: pip install plyfile")
     ply = PlyData.read(io.BytesIO(data))
@@ -245,14 +163,7 @@ def load_ply_bytes(data: bytes) -> Dict[str, Any]:
 def load_pt_bytes(data: bytes) -> Dict[str, Any]:
     if torch is None:
         raise RuntimeError("PyTorch is required to read .pt files. Install torch first.")
-    try:
-        # Public requests accept only tensor-only checkpoints. This avoids unpickling
-        # user-provided Python objects while retaining normal gsplat tensor dictionaries.
-        obj = torch.load(io.BytesIO(data), map_location="cpu", weights_only=PUBLIC_MODE)
-    except Exception as exc:
-        if PUBLIC_MODE:
-            raise RuntimeError("Public uploads require a tensor-only PT checkpoint; Python objects are not supported.") from exc
-        raise
+    obj = torch.load(io.BytesIO(data), map_location="cpu", weights_only=False)
     if isinstance(obj, dict) and "frames" in obj and isinstance(obj["frames"], (list, tuple)):
         obj = obj["frames"][0]
     if isinstance(obj, dict) and isinstance(obj.get("splats"), dict):
@@ -283,59 +194,6 @@ def load_ply(filepath: str) -> Dict[str, Any]:
     """Load a PLY file into the editor's canonical NumPy representation."""
     with open(filepath, "rb") as handle:
         return load_ply_bytes(handle.read())
-
-
-def _validate_ply_payload(data: bytes) -> None:
-    """Reject malformed or oversized PLY input before plyfile allocates arrays."""
-    if not data:
-        raise ValueError("The PLY file is empty")
-    single_file_limit = MAX_SINGLE_FILE_MB * 1024 * 1024
-    if len(data) > single_file_limit:
-        raise ValueError(f"A single file cannot exceed {MAX_SINGLE_FILE_MB} MB")
-    marker = data.find(b"end_header")
-    if marker < 0 or marker > 64 * 1024:
-        raise ValueError("PLY header is missing or exceeds 64 KB")
-    header_end = data.find(b"\n", marker)
-    if header_end < 0:
-        raise ValueError("PLY header is incomplete")
-    try:
-        lines = [line.strip() for line in data[:header_end + 1].decode("ascii").splitlines()]
-    except UnicodeDecodeError as exc:
-        raise ValueError("PLY headers must be ASCII") from exc
-    if not lines or lines[0] != "ply" or not any(line.startswith("format ") for line in lines):
-        raise ValueError("The file is not a valid PLY payload")
-    vertex_counts = [int(match.group(1)) for line in lines
-                     if (match := re.fullmatch(r"element\s+vertex\s+(\d+)", line))]
-    if len(vertex_counts) != 1:
-        raise ValueError("PLY must declare exactly one vertex element")
-    if vertex_counts[0] > MAX_POINT_COUNT:
-        raise ValueError(f"PLY exceeds the {MAX_POINT_COUNT:,} point limit")
-
-
-def _parse_uploaded_file(uploaded) -> Tuple[str, Dict[str, Any]]:
-    filename = os.path.basename(uploaded.filename or "")
-    extension = os.path.splitext(filename)[1].lower()
-    if not filename or extension not in (".ply", ".pt"):
-        raise ValueError(f"Unsupported file type: {filename or '<unnamed>'}")
-    data = uploaded.read(MAX_SINGLE_FILE_MB * 1024 * 1024 + 1)
-    if len(data) > MAX_SINGLE_FILE_MB * 1024 * 1024:
-        raise ValueError(f"A single file cannot exceed {MAX_SINGLE_FILE_MB} MB")
-    if extension == ".pt":
-        _validate_public_pt_payload(data)
-    return filename, load_ply_bytes(data) if extension == ".ply" else load_pt_bytes(data)
-
-
-def _validate_public_pt_payload(data: bytes) -> None:
-    """Bound decompression before handing an untrusted PT archive to PyTorch."""
-    if not PUBLIC_MODE:
-        return
-    if not zipfile.is_zipfile(io.BytesIO(data)):
-        raise ValueError("Public PT uploads must use PyTorch's ZIP checkpoint format")
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        files = archive.infolist()
-        total_size = sum(info.file_size for info in files)
-        if len(files) > 10000 or total_size > MAX_PT_UNCOMPRESSED_MB * 1024 * 1024:
-            raise ValueError(f"PT checkpoint exceeds the {MAX_PT_UNCOMPRESSED_MB} MB decompressed limit")
 
 
 def load_pt(filepath: str) -> Dict[str, Any]:
@@ -489,9 +347,7 @@ def state_summary() -> Dict[str, Any]:
                 "num_frames": STATE["num_frames"], "interpolation_method": STATE["interpolation_method"],
                 "export_progress": STATE["export_progress"], "parts": [_serialize_part(k, v) for k, v in STATE["parts"].items()],
                 "tracks": {str(k): v for k, v in STATE["tracks"].items()},
-                "has_4dgs": bool(STATE["4dgs_parts"]), "public_mode": PUBLIC_MODE,
-                "max_upload_mb": MAX_UPLOAD_MB, "max_point_count": MAX_POINT_COUNT,
-                "workspace_id": _WORKSPACE_ID.get()}
+                "has_4dgs": bool(STATE["4dgs_parts"])}
 
 
 def _color_for(pid: int) -> List[float]:
@@ -752,13 +608,18 @@ def api_upload():
         files = request.files.getlist("files")  # Compatibility with the existing browser UI.
     if not files: return jsonify({"error": "没有收到文件"}), 400
     parsed_files = []
+    upload_dir = tempfile.mkdtemp(prefix="upload_", dir=UPLOAD_ROOT)
     try:
         for uploaded in files:
-            parsed_files.append(_parse_uploaded_file(uploaded))
+            filename = os.path.basename(uploaded.filename or "")
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in (".ply", ".pt"):
+                return jsonify({"error": f"Unsupported file type: {filename or '<unnamed>'}"}), 400
+            upload_path = os.path.join(upload_dir, filename)
+            uploaded.save(upload_path)
+            parsed_files.append((filename, load_ply(upload_path) if ext == ".ply" else load_pt(upload_path)))
     except Exception as exc: return jsonify({"error": str(exc)}), 400
     if not parsed_files: return jsonify({"error": "没有有效的 .ply 或 .pt 文件"}), 400
-    if sum(source["n_vertices"] for _, source in parsed_files) > MAX_POINT_COUNT:
-        return jsonify({"error": f"The combined upload exceeds the {MAX_POINT_COUNT:,} point limit"}), 400
     first = parsed_files[0][0]
     parsed = {}
     parsed["xyz"] = np.concatenate([p["xyz"] for _, p in parsed_files], axis=0)
@@ -791,12 +652,20 @@ def api_upload():
                     "sh_degree": STATE["sh_degree"], "parts_created": parts_created, "n_files": len(parsed_files)})
 
 def _load_uploaded_pointclouds(uploaded_files) -> List[Tuple[str, Dict[str, Any]]]:
-    """Read an append request without retaining untrusted source files on disk."""
-    parsed_files = [_parse_uploaded_file(uploaded) for uploaded in uploaded_files]
+    """Save incoming files under the temporary upload root and load canonical point clouds."""
+    upload_dir = tempfile.mkdtemp(prefix="upload_", dir=UPLOAD_ROOT)
+    parsed_files = []
+    for sequence, uploaded in enumerate(uploaded_files):
+        filename = os.path.basename(uploaded.filename or "")
+        extension = os.path.splitext(filename)[1].lower()
+        if not filename or extension not in (".ply", ".pt"):
+            raise ValueError(f"Unsupported file type: {filename or '<unnamed>'}")
+        saved_name = filename if not os.path.exists(os.path.join(upload_dir, filename)) else f"{sequence}_{filename}"
+        saved_path = os.path.join(upload_dir, saved_name)
+        uploaded.save(saved_path)
+        parsed_files.append((filename, load_ply(saved_path) if extension == ".ply" else load_pt(saved_path)))
     if not parsed_files:
         raise ValueError("No .ply or .pt files were provided")
-    if sum(source["n_vertices"] for _, source in parsed_files) > MAX_POINT_COUNT:
-        raise ValueError(f"The combined upload exceeds the {MAX_POINT_COUNT:,} point limit")
     return parsed_files
 
 
@@ -815,8 +684,6 @@ def api_upload_append():
         if not STATE["loaded"] or STATE["xyz"] is None or int(STATE.get("n_vertices", 0)) <= 0:
             return jsonify({"error": "Upload a base point cloud before appending"}), 400
         previous_count = int(STATE["n_vertices"])
-        if previous_count + sum(source["n_vertices"] for _, source in parsed_files) > MAX_POINT_COUNT:
-            return jsonify({"error": f"The combined workspace exceeds the {MAX_POINT_COUNT:,} point limit"}), 400
         target_degree = max([int(STATE["sh_degree"])] + [int(source["sh_degree"]) for _, source in parsed_files])
         combined = _combine_static_frames([_static_frame_from_state()] + [source for _, source in parsed_files], target_degree)
         for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest"):
@@ -847,8 +714,6 @@ def api_upload_append():
 
 @app.post("/api/upload_4dgs")
 def api_upload_4dgs():
-    if PUBLIC_MODE:
-        return jsonify({"error": "4DGS server-directory imports are disabled in public mode"}), 403
     body = request.get_json(silent=True) or {}
     dir_path = body.get("dir_path")
     if not isinstance(dir_path, str) or not dir_path:
@@ -1115,16 +980,13 @@ def _export_frame_payload(frame: int) -> Dict[str, Any]:
 def api_export():
     body = request.get_json(silent=True) or {}
     output_dir = body.get("output_dir")
-    if not PUBLIC_MODE and (not isinstance(output_dir, str) or not output_dir.strip()):
+    if not isinstance(output_dir, str) or not output_dir.strip():
         return jsonify({"error": "output_dir is required"}), 400
     with STATE_LOCK:
         if not STATE["loaded"] or not _workspace_has_data():
             return jsonify({"error": "No point-cloud data is loaded"}), 400
         if STATE.get("export_active", False):
             return jsonify({"error": "An export is already in progress"}), 409
-        workspace_id = _WORKSPACE_ID.get()
-        if PUBLIC_MODE:
-            output_dir = os.path.join(_workspace_export_root(workspace_id), "animation")
         try:
             os.makedirs(output_dir, exist_ok=True)
         except OSError as exc:
@@ -1136,7 +998,6 @@ def api_export():
         STATE["export_dir"] = os.path.abspath(output_dir)
 
     def worker():
-        token = _WORKSPACE_ID.set(workspace_id)
         try:
             for index in range(frame_count):
                 payload = _export_frame_payload(index)
@@ -1150,7 +1011,6 @@ def api_export():
             with STATE_LOCK:
                 STATE["export_active"] = False
                 STATE["export_done"] = STATE["export_progress"] == 100
-            _WORKSPACE_ID.reset(token)
 
     threading.Thread(target=worker, daemon=True, name="4dgs-export").start()
     return jsonify({"ok": True, "num_frames": frame_count, "output_dir": os.path.abspath(output_dir)})
@@ -1168,7 +1028,7 @@ def api_export_status():
 def api_export_current_v2():
     body = request.get_json(silent=True) or {}
     output_path = body.get("output_path")
-    if not PUBLIC_MODE and (not isinstance(output_path, str) or not output_path.strip()):
+    if not isinstance(output_path, str) or not output_path.strip():
         return jsonify({"error": "output_path is required"}), 400
     try:
         frame = int(body.get("frame", 0))
@@ -1178,19 +1038,15 @@ def api_export_current_v2():
         if not STATE["loaded"] or not _workspace_has_data():
             return jsonify({"error": "No point-cloud data is loaded"}), 400
         frame = max(0, min(frame, max(0, STATE["num_frames"] - 1)))
-        if PUBLIC_MODE:
-            output_path = os.path.join(_workspace_export_root(), f"frame_{frame:04d}.pt")
-        else:
-            output_path = output_path if output_path.lower().endswith(".pt") else output_path + ".pt"
-            output_path = os.path.abspath(output_path)
+        output_path = output_path if output_path.lower().endswith(".pt") else output_path + ".pt"
+        output_path = os.path.abspath(output_path)
         try:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
             payload = _export_frame_payload(frame)
             _write_pt(output_path, payload)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
-        return jsonify({"ok": True, "output_path": output_path, "n_vertices": int(payload["n_vertices"]), "frame": frame,
-                        "download": f"/api/download/current/{frame}" if PUBLIC_MODE else None})
+        return jsonify({"ok": True, "output_path": output_path, "n_vertices": int(payload["n_vertices"]), "frame": frame})
 
 
 @app.post("/api/create-part")
@@ -1242,8 +1098,6 @@ def api_settings():
 
 @app.post("/api/import-4dgs")
 def api_import_4dgs():
-    if PUBLIC_MODE:
-        return jsonify({"error": "PT imports are disabled in public mode"}), 403
     files = request.files.getlist("files"); names = request.form.getlist("filenames") or [f.filename for f in files]
     if not files: return jsonify({"error": "请选择 .pt 帧序列"}), 400
     frames = []
@@ -1269,31 +1123,19 @@ def api_import_4dgs():
 def api_export_current():
     if torch is None: return jsonify({"error": "PyTorch 未安装，无法导出"}), 400
     frame = int((request.get_json(silent=True) or {}).get("frame", 0)); payload = frame_payload(frame)
-    export_root = _workspace_export_root()
-    os.makedirs(export_root, exist_ok=True)
-    path = os.path.join(export_root, f"frame_{frame:04d}.pt")
+    path = os.path.join(EXPORT_ROOT, f"frame_{frame:04d}.pt")
     _write_pt(path, frame_data(frame)); return jsonify({"path": path, "filename": os.path.basename(path), "download": f"/api/download/current/{frame}"})
 
 @app.post("/api/export/all")
 def api_export_all():
     if torch is None: return jsonify({"error": "PyTorch 未安装，无法导出"}), 400
-    workspace_id = _WORKSPACE_ID.get()
     def worker():
-        token = _WORKSPACE_ID.set(workspace_id)
-        try:
-            with STATE_LOCK:
-                STATE["export_progress"] = 0
-                count = STATE["num_frames"]
-            export_root = _workspace_export_root(workspace_id)
-            os.makedirs(export_root, exist_ok=True)
-            out = tempfile.mkdtemp(prefix="4dgs_export_", dir=export_root)
-            for i in range(count):
-                _write_pt(os.path.join(out, f"frame_{i:04d}.pt"), frame_data(i))
-                with STATE_LOCK: STATE["export_progress"] = int((i + 1) * 100 / count)
-            with STATE_LOCK:
-                STATE["export_dir"] = out
-        finally:
-            _WORKSPACE_ID.reset(token)
+        with STATE_LOCK: STATE["export_progress"] = 0; count = STATE["num_frames"]
+        out = tempfile.mkdtemp(prefix="4dgs_export_", dir=EXPORT_ROOT)
+        for i in range(count):
+            _write_pt(os.path.join(out, f"frame_{i:04d}.pt"), frame_data(i))
+            with STATE_LOCK: STATE["export_progress"] = int((i+1)*100/count)
+        with STATE_LOCK: STATE["export_dir"] = out
     threading.Thread(target=worker, daemon=True).start(); return jsonify({"started": True})
 
 @app.get("/api/export/progress")
@@ -1303,7 +1145,7 @@ def api_export_progress():
 
 @app.get("/api/download/current/<int:frame>")
 def api_download_current(frame):
-    path = os.path.join(_workspace_export_root(), f"frame_{frame:04d}.pt")
+    path = os.path.join(EXPORT_ROOT, f"frame_{frame:04d}.pt")
     if not os.path.isfile(path): return jsonify({"error": "文件尚未导出"}), 404
     return send_file(path, as_attachment=True, download_name=os.path.basename(path))
 
@@ -1312,9 +1154,7 @@ def api_download_current(frame):
 def api_download_all():
     with STATE_LOCK: export_dir = STATE["export_dir"]
     if not export_dir or not os.path.isdir(export_dir): return jsonify({"error": "尚未完成全部帧导出"}), 404
-    export_root = _workspace_export_root()
-    os.makedirs(export_root, exist_ok=True)
-    zip_path = os.path.join(export_root, "4dgs_animation_frames.zip")
+    zip_path = os.path.join(EXPORT_ROOT, "4dgs_animation_frames.zip")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
         for name in sorted(os.listdir(export_dir)):
             if name.endswith(".pt"): archive.write(os.path.join(export_dir, name), name)
