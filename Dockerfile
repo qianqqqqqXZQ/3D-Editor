@@ -18,4 +18,4 @@ RUN mkdir -p /app/generated
 
 EXPOSE 5011
 
-CMD ["python", "app.py"]
+CMD ["sh", "-c", "gunicorn --workers 1 --threads 8 --bind 0.0.0.0:${PORT:-5011} app:app"]

@@ -82,9 +82,17 @@ py -3.13 -m py_compile app.py
 
 ## Current Request: Public Deployment With Vercel Frontend (2026-08-17)
 
-- [ ] Create a Git checkpoint before deployment-hardening changes.
-- [ ] Define a production topology: Vercel serves the static editor while a persistent container service runs the Flask API.
-- [ ] Make the frontend select its API origin from a build-time configuration while retaining same-origin local development.
-- [ ] Add public-upload guardrails: PLY-only public mode, request/content limits, point-count limits, per-workspace isolation, automatic cleanup, and controlled export paths.
-- [ ] Add production WSGI/container configuration and Vercel routing, headers, and deployment documentation.
-- [ ] Run API regression tests, browser/static checks, a focused security review, and deployment configuration validation.
+- [x] Create a Git checkpoint before deployment-hardening changes.
+- [x] Define a production topology: Vercel serves the static editor while a persistent container service runs the Flask API.
+- [x] Make the frontend select its API origin from a build-time configuration while retaining same-origin local development.
+- [x] Add public-upload guardrails: safe tensor-only PT/PLY parsing, request/content limits, point-count limits, per-workspace isolation, automatic cleanup, and controlled export paths.
+- [x] Add production WSGI/container configuration and Vercel routing, headers, and deployment documentation.
+- [x] Run API regression tests, browser/static checks, a focused security review, and deployment configuration validation.
+
+2026-08-17 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Public-mode Flask regression: distinct workspaces, safe tensor-only PT upload, unsafe PT rejection, and workspace-scoped download.
+- Public-mode CORS preflight regression for `X-Workspace-ID` and credentialed Vercel-origin requests.
+- `npm run build`, Vercel JSON parsing, inline editor JavaScript compilation, and `git diff --check`.
+- Docker CLI was unavailable on the development machine, so the container image itself could not be built locally.
