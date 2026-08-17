@@ -73,3 +73,12 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 
 - Point-cloud `PointsMaterial` uses `sizeAttenuation: false`. The UI point-size slider is a pixel-size control; enabling attenuation here made the default value `3` world units and produced giant black point sprites that covered the viewport.
 - Coordinate axes are rendered by `addThickAxes()` as red, green, and blue cylinders with `depthTest: false`, which keeps them stable over the grid and avoids origin z-fighting.
+
+## Rendering Bugfix Notes (2026-08-17)
+
+- Static `/api/pointcloud` responses include positions, colors, and four-byte Part IDs. The active
+  editor must parse this endpoint with metadata enabled; passing `false` filled every `partIds`
+  entry with `-1`, so `previewAllTransforms()` skipped all static vertices while the pivot marker
+  still moved.
+- `loadPointCloud()` now parses both active binary endpoints with metadata enabled. `/api/frame` is
+  selected only for 4DGS workspaces, where it also carries colors and Part IDs.

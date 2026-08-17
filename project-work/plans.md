@@ -94,3 +94,23 @@ py -3.13 -m py_compile app.py
 - Static platform review found no Windows-specific backend paths or commands. Docker is not
   installed and WSL has no Linux distribution in the current environment, so a native Linux or
   container run was not available for this checkout.
+
+## Bugfix: static Part transform preview (2026-08-17)
+
+- [x] Trace the static point-cloud load path and compare its binary metadata contract with the
+  browser parser.
+- [x] Preserve static Part IDs in the active editor so translation and rotation are applied to
+  point positions, not only to the pivot marker.
+- [x] Run Python, JavaScript, API/coordinate, page smoke, and diff checks; review the focused
+  frontend change and record the browser upload-tool limitation.
+
+2026-08-17 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Active `static/editor.html` script parsed with `new Function`.
+- Flask test client regression confirmed `/api/pointcloud` returns Part IDs and a keyframe with
+  translation plus 90-degree rotation produces the expected transformed coordinates.
+- Local browser opened `http://127.0.0.1:5011/`, rendered the active editor DOM with no startup
+  console errors. Automated hidden-file chooser upload timed out, so no visual point movement
+  assertion was made through the browser.
+- `git diff --check`
