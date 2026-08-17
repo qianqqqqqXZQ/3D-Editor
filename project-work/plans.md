@@ -79,3 +79,18 @@ py -3.13 -m py_compile app.py
 - [x] Replace the thin `AxesHelper` with thicker red/green/blue cylinder axes.
 - [x] Disable depth testing and depth writes for the axes to prevent grid z-fighting at the origin.
 - [x] Verify the empty editor viewport visually and confirm no browser console errors.
+
+## Current Request: Linux Quick Start (2026-08-17)
+
+- [x] Inspect the server, dependencies, and container definition for platform-specific constraints.
+- [x] Add an Ubuntu/Debian Linux Quick Start to the English README section.
+- [x] Run available validation checks, review the documentation change, and record the Linux verification boundary.
+
+2026-08-17 verification completed:
+
+- `python -m py_compile app.py`
+- Flask test client `GET /` and `GET /static/editor.html` smoke checks (both returned HTTP 200).
+- README Linux Quick Start content check and `git diff --check`.
+- Static platform review found no Windows-specific backend paths or commands. Docker is not
+  installed and WSL has no Linux distribution in the current environment, so a native Linux or
+  container run was not available for this checkout.

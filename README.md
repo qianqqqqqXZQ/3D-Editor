@@ -34,6 +34,40 @@
 
 ### Quick Start
 
+#### Linux (Ubuntu/Debian)
+
+The editor runs natively on 64-bit Ubuntu and Debian systems with Python 3.10 or newer.
+The default dependency set does not require a GPU or CUDA toolkit for parsing and export. A
+WebGL-capable browser is required for the editor viewport.
+
+Install Python and Git, clone the repository, and create an isolated environment:
+
+```bash
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip
+git clone <repository-url>
+cd 3D-editor
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Install the dependencies and run the server:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python app.py
+```
+
+Open [http://localhost:5011](http://localhost:5011). To use the editor from another machine on
+the same network, allow TCP port `5011` through the Linux firewall and open
+`http://<linux-host-ip>:5011` from that machine. The application already listens on all network
+interfaces.
+
+The published PyTorch wheels used by `requirements.txt` target mainstream glibc-based Linux
+distributions. On Alpine Linux, or on an architecture other than `x86_64` or `ARM64`, use a
+PyTorch installation method supported by that platform before installing the remaining requirements.
+
 #### Local Python
 
 Python 3.10 or newer is recommended. PyTorch must be available for `.pt` input and export; the provided requirements install the CPU-compatible dependency set.
@@ -52,7 +86,7 @@ Activate the environment:
 ```
 
 ```bash
-# macOS/Linux
+# macOS
 source .venv/bin/activate
 ```
 

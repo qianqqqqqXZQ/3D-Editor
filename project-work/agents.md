@@ -33,6 +33,18 @@ py -3.13 -m py_compile app.py
 
 The server listens on `http://localhost:5011`.
 
+## Linux Compatibility (2026-08-17)
+
+- The backend has no Windows-specific paths or system commands. `app.py` listens on
+  `0.0.0.0:5011`, so the same Flask entry point works on Linux and can be reached from the
+  network when firewall rules permit it.
+- `requirements.txt` uses platform-independent Python packages and PyTorch from regular PyPI. The
+  documented native path targets 64-bit Ubuntu/Debian with Python 3.10+ and a glibc-based
+  distribution. CUDA is not required for parsing or export.
+- `Dockerfile` uses the Linux `python:3.11-slim` base image and is the portable container path.
+  Docker was not installed in the current Windows environment on 2026-08-17, so a local Linux
+  image build/run validation could not be performed here.
+
 ## Current API Work (2026-08-14)
 
 The current task adds a specified SH DC color conversion, binary `GET /api/pointcloud`, and
