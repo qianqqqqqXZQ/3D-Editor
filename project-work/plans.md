@@ -149,3 +149,24 @@ py -3.13 -m py_compile app.py
   two generated PT files uploaded through file chooser, point counts and color-source metadata displayed,
   B-only visibility toggled, and exit cleanup restored the editor UI.
 - `git diff --check`
+
+## Current Request: Comparison Dual view (2026-08-18)
+
+- [x] Create a recoverable Git checkpoint before the Dual view implementation (`2ff9a1f`).
+- [x] Add the four-mode Comparison UI with a responsive A/B Dual view layout.
+- [x] Add two independent Dual view renderers/cameras with optional camera linking and reset behavior.
+- [x] Preserve single-view A-only/B-only/Both behavior and clean up Dual view resources on exit.
+- [x] Run syntax, backend/API, browser layout, lifecycle, and diff checks; complete a focused code review.
+
+2026-08-18 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Active `static/editor.html` script parsed with Node `--check`.
+- Flask startup smoke check served the editor; existing Comparison API contract remained unchanged.
+- In-app browser desktop check confirmed four modes, two renderer canvases, linked/unlinked camera controls,
+  reset behavior, single-view restoration, Dual renderer cleanup, and no console warnings/errors.
+- In-app browser `390x844` check confirmed stacked panes, no horizontal overflow, and the mobile Comparison
+  panel no longer obscures the panes.
+- `git diff --check`
+- Focused review covered renderer disposal, shared point geometry ownership, camera sync recursion guards,
+  mode transitions, and responsive CSS ordering.

@@ -107,3 +107,18 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
   plus A-only/B-only/Both shortcuts, and disposes comparison geometry/materials on exit.
 - Mobile comparison mode overrides the legacy hidden left sidebar with a scrollable overlay panel so the
   two file inputs and visibility controls remain reachable at narrow widths.
+
+## Comparison Dual view Notes (2026-08-18)
+
+- Comparison now has four peer modes: A only, B only, Both (single viewport overlay), and Dual view.
+- Dual view creates two pane-local Three.js scenes/renderers/cameras/OrbitControls only while Comparison is
+  active. Cloud A and Cloud B are shown in separate panes, side-by-side on desktop and stacked on narrow screens.
+- Dual panes clone the point objects while sharing the source geometries; pane materials and helper scene
+  resources are disposed without releasing the main Comparison geometry twice.
+- `Link cameras` is enabled by default. Camera position, quaternion, zoom, and OrbitControls target are copied
+  with a recursion guard. Linked reset fits the union of both clouds; unlinked reset fits each pane separately.
+- Dual view forces both clouds visible and disables the single-view visibility checkboxes. Switching back to a
+  single mode restores A-only/B-only/Both visibility semantics. Exiting Comparison removes pane canvases,
+  controls, renderers, and helper resources before refreshing the editor.
+- Frontend verification includes Node syntax parsing, Flask compile/startup checks, desktop and `390x844`
+  browser layout/lifecycle checks, console error inspection, and `git diff --check`.
