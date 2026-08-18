@@ -31,6 +31,15 @@ py -3.13 app.py
 py -3.13 -m py_compile app.py
 ```
 
+Ubuntu/Debian equivalent:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python app.py
+```
+
 The server listens on `http://localhost:5011`.
 
 ## Linux Compatibility (2026-08-17)

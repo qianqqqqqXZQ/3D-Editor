@@ -58,6 +58,21 @@ py -3.13 -m py_compile app.py
 - Explicit UTF-8 README section checks for both language sections and required headings.
 - `git diff --check`
 
+## Current Request: Chinese Ubuntu Quick Start (2026-08-18)
+
+- [x] Create a recoverable Git checkpoint before the documentation change (`00e5c42`).
+- [x] Add Chinese Ubuntu/Debian instructions to the README, including virtualenv setup,
+  browser URL, LAN access, and UFW port configuration.
+- [x] Run documentation/code checks and complete a focused documentation review.
+
+2026-08-18 verification completed:
+
+- `python -m py_compile app.py`
+- UTF-8 README content checks for the Ubuntu/Debian commands and URLs.
+- `git diff --check`
+- Focused review confirmed the documented local URL matches `app.py` (`0.0.0.0:5011`)
+  and the LAN/UFW instructions match the server's network behavior.
+
 ## Current Request: Frontend transform, selection, timeline, and export contract (2026-08-16)
 
 - [x] Create a recoverable Git checkpoint before the implementation changes.

@@ -192,6 +192,42 @@ Thanks to Codex for providing vibe-coding support throughout the development of 
 
 ### 快速开始 (Quick Start)
 
+#### Ubuntu / Debian
+
+在 Ubuntu 或 Debian 上可以直接用 Python 启动网站。先安装 Git、Python 和虚拟环境工具：
+
+```bash
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip
+```
+
+然后下载项目、创建并激活虚拟环境，安装依赖并启动 Flask 服务：
+
+```bash
+git clone <repository-url>
+cd 3D-editor
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python app.py
+```
+
+看到服务启动后，在 Ubuntu 的浏览器中打开 [http://localhost:5011](http://localhost:5011)。
+保持运行 `python app.py` 的终端窗口不要关闭；按 `Ctrl+C` 可以停止服务。
+
+如果要从同一局域网的另一台电脑访问，先在 Ubuntu 上查看局域网 IP：
+
+```bash
+hostname -I
+```
+
+然后在另一台电脑的浏览器中打开 `http://<Ubuntu_IP>:5011`。如果 Ubuntu 启用了 UFW，放行端口：
+
+```bash
+sudo ufw allow 5011/tcp
+```
+
 #### 本地 Python
 
 建议使用 Python 3.10 或更高版本。读取 `.pt` 和导出功能需要 PyTorch，项目依赖文件会安装 CPU 兼容的依赖集合。
