@@ -130,6 +130,15 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 - `createDualPane`, `ensureDualView`, and Dual-mode visibility refresh now force pane point objects visible.
   Single-view A/B visibility remains controlled by `comparisonVisibility`; Dual view always shows both clouds.
 
+## Comparison Cloud Transform Export Notes (2026-08-18)
+
+- Comparison keeps immutable base XYZ arrays and independent `{tx, ty, tz, rx, ry, rz}` transforms for Cloud A
+  and Cloud B. Rotation reuses the editor's ZYX matrix and uses each cloud's base-geometry centroid as pivot.
+- Transform edits update the shared Three.js geometry and recompute its bounding sphere, so both single and Dual
+  view reflect the selected cloud without changing the editor `STATE` or backend comparison session.
+- `Export selected .ply` downloads a binary little-endian PLY containing transformed float32 XYZ and uint8 RGB;
+  it is a browser-local download and leaves original uploaded files untouched.
+
 ## Raw Tensor PT Notes (2026-08-18)
 
 - `load_pt_bytes` accepts a raw `torch.Tensor` saved directly with `torch.save` when it is two-dimensional

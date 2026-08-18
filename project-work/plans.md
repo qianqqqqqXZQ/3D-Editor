@@ -204,3 +204,20 @@ py -3.13 -m py_compile app.py
   dimensions and the browser reported no warnings or errors.
 - Focused review confirmed single-view visibility semantics still apply only outside Dual view, while both
   Dual view pane objects are explicitly visible on creation and reuse.
+
+## Current Request: Comparison cloud transform and export (2026-08-18)
+
+- [x] Create a recoverable Git checkpoint before the transform/export implementation (`62518ad`).
+- [x] Add independent Cloud A/B selection and TX/TY/TZ plus RX/RY/RZ controls in Comparison mode.
+- [x] Apply transforms from immutable source coordinates around each cloud centroid and keep single/Dual view geometry synchronized.
+- [x] Export the selected transformed cloud as a binary little-endian PLY with XYZ and RGB.
+- [x] Run syntax/backend checks, browser transform/reset/Dual view coverage, PLY byte verification, and focused code review.
+
+2026-08-18 verification completed:
+
+- Active `static/editor.html` script parsed with Node `--check`; `py -3.13 -m py_compile app.py`; `git diff --check`.
+- Browser fixture upload loaded two raw Tensor clouds. Cloud A retained `TX=3` and `RZ=90` after selecting Cloud B;
+  Cloud B independently retained `TY=2`. Both Dual view canvases had valid dimensions, and reset restored B to zero.
+- Browser download produced `comparison_transform_a.transformed.ply`; binary parsing verified two vertices at
+  `(4,-1,0)` and `(4,1,0)` with the expected red/green RGB bytes.
+- Browser console reported no warnings or errors; the change does not add a backend API or mutate editor state.

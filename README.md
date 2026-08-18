@@ -142,6 +142,10 @@ The UI uses the following REST endpoints, which can also be called from scripts:
 - `GET/PUT /api/settings` for timeline length and interpolation method.
 - `POST /api/export`, `GET /api/export/status`, and `POST /api/export_current` for exports.
 
+Comparison mode also provides client-side Cloud A/B transforms. Select a cloud, edit TX/TY/TZ and RX/RY/RZ
+(rotation uses the cloud centroid and the editor's ZYX order), then use **Export selected .ply** to download
+the transformed cloud as a binary PLY containing XYZ and RGB.
+
 ### Development Checks
 
 ```bash
@@ -293,6 +297,9 @@ docker run --rm -p 5011:5011 -v /path/to/frames:/data/frames 3d-editor
 - `GET/POST/DELETE /api/keyframes/<pid>...`：管理关键帧。
 - `GET/PUT /api/settings`：设置时间线长度和插值方式。
 - `POST /api/export`、`GET /api/export/status`、`POST /api/export_current`：导出数据。
+
+Comparison 模式支持分别选择 Cloud A 或 Cloud B，编辑 TX/TY/TZ 与 RX/RY/RZ（围绕点云中心、使用编辑器的 ZYX
+旋转顺序），并通过 **Export selected .ply** 下载包含 XYZ 与 RGB 的二进制 PLY；该导出在浏览器本地完成。
 
 ### 开发检查
 
