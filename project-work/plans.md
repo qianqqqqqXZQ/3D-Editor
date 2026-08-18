@@ -114,3 +114,23 @@ py -3.13 -m py_compile app.py
   console errors. Automated hidden-file chooser upload timed out, so no visual point movement
   assertion was made through the browser.
 - `git diff --check`
+
+## Current Request: Isolated point-cloud Comparison (2026-08-18)
+
+- [x] Create a Git checkpoint before Comparison implementation (`afbb16e`).
+- [x] Add isolated two-cloud Flask session APIs with binary XYZ/RGB payloads and strict upload validation.
+- [x] Preserve explicit PLY/PT RGB and fall back to SH-derived or neutral gray display colors.
+- [x] Add the Three.js Comparison mode with shared camera, A/B visibility toggles, quick combinations, and point-size control.
+- [x] Keep Comparison state separate from editor Parts/keyframes and restore the editor on exit.
+- [x] Run backend regression, JavaScript syntax, desktop/mobile browser checks, and focused code review.
+
+2026-08-18 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Flask test client coverage for two-color PLY, colorless PLY fallback, explicit-color PT, SH-only PT,
+  binary payload lengths, invalid file counts, delete behavior, and unchanged `/api/state`.
+- Active `static/editor.html` script parsed with `new Function` / Node syntax check.
+- Local browser at desktop and `390x844` mobile viewports: Comparison controls rendered, mobile panel remained accessible,
+  two generated PT files uploaded through file chooser, point counts and color-source metadata displayed,
+  B-only visibility toggled, and exit cleanup restored the editor UI.
+- `git diff --check`

@@ -71,6 +71,10 @@ STATE: Dict[str, Any] = {
 }
 STATE_LOCK = threading.RLock()
 
+# Comparison data is deliberately kept outside the editor STATE so a comparison
+# upload cannot change Parts, keyframes, exports, or the active workspace.
+COMPARISON_STATE: Dict[str, Any] = {"clouds": {"a": None, "b": None}}
+
 
 def _arr(value: Any, shape: Tuple[int, ...], default: float = 0.0) -> np.ndarray:
     if value is None:
@@ -95,6 +99,25 @@ def _field(obj: Any, names: List[str], default: Any = None) -> Any:
     return default
 
 
+def _normalise_rgb(value: Any, n: int) -> Optional[np.ndarray]:
+    """Normalise an explicit RGB field to an ``(n, 3)`` float array."""
+    if value is None or n <= 0:
+        return None
+    try:
+        array = value.detach().cpu().numpy() if hasattr(value, "detach") else np.asarray(value)
+        array = np.asarray(array, dtype=np.float64)
+        if array.size != n * 3:
+            return None
+        array = array.reshape((n, 3))
+        if not np.isfinite(array).all():
+            return None
+        if np.max(np.abs(array)) > 1.0:
+            array = array / 255.0
+        return np.clip(array, 0.0, 1.0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalise_frame(obj: Any) -> Dict[str, Any]:
     xyz = _field(obj, ["xyz", "means3D", "means", "positions", "pos", "points"])
     if xyz is None and isinstance(obj, (list, tuple)) and len(obj) >= 1:
@@ -113,6 +136,7 @@ def _normalise_frame(obj: Any) -> Dict[str, Any]:
     scales = _arr(scales, (n, 3), 0.0)
     opacities = _field(obj, ["opacities", "opacity", "alpha"])
     opacities = _arr(opacities, (n,), 0.0)
+    explicit_colors = _normalise_rgb(_field(obj, ["colors", "rgb", "color"]), n)
     sh0 = _field(obj, ["sh0", "features_dc", "colors", "rgb", "color"])
     sh0 = _arr(sh0, (n, 3), 0.0)
     sh_rest = _field(obj, ["sh_rest", "features_rest"])
@@ -125,7 +149,8 @@ def _normalise_frame(obj: Any) -> Dict[str, Any]:
         sh_rest = sr
     degree = int(_field(obj, ["sh_degree", "degree"], 0) or 0)
     return {"xyz": xyz, "quats": quats, "scales": scales, "opacities": opacities,
-            "sh0": sh0, "sh_rest": sh_rest, "sh_degree": degree, "n_vertices": n}
+            "sh0": sh0, "sh_rest": sh_rest, "sh_degree": degree, "n_vertices": n,
+            "colors": explicit_colors, "has_colors": explicit_colors is not None}
 
 
 def load_ply_bytes(data: bytes) -> Dict[str, Any]:
@@ -136,10 +161,12 @@ def load_ply_bytes(data: bytes) -> Dict[str, Any]:
     names = set(vertex.data.dtype.names or [])
     xyz = np.stack([vertex[axis] for axis in ("x", "y", "z")], axis=1).astype(np.float64)
     n = len(xyz)
-    colors = np.zeros((n, 3), dtype=np.float64)
-    for i, c in enumerate(("red", "green", "blue")):
-        if c in names:
-            colors[:, i] = np.asarray(vertex[c], dtype=np.float64) / (255.0 if np.max(vertex[c]) > 1.0 else 1.0)
+    has_colors = all(c in names for c in ("red", "green", "blue"))
+    colors = np.zeros((n, 3), dtype=np.float64) if has_colors else None
+    if has_colors:
+        for i, c in enumerate(("red", "green", "blue")):
+            channel = np.asarray(vertex[c], dtype=np.float64)
+            colors[:, i] = channel / (255.0 if np.max(channel) > 1.0 else 1.0)
     quats = np.zeros((n, 4), dtype=np.float64); quats[:, 0] = 1.0
     qnames = [("rot_0", 0), ("rot_1", 1), ("rot_2", 2), ("rot_3", 3)]
     if all(k in names for k, _ in qnames):
@@ -157,7 +184,8 @@ def load_ply_bytes(data: bytes) -> Dict[str, Any]:
     n_rest = int(sh_rest.shape[1] * 3) if sh_rest is not None else 0
     degree = int(math.sqrt(n_rest // 3 + 1)) - 1 if n_rest else 0
     return {"xyz": xyz, "quats": quats, "scales": scales, "opacities": opacities,
-            "sh0": sh0, "sh_rest": sh_rest, "sh_degree": max(degree, 0), "n_vertices": n}
+            "sh0": sh0, "sh_rest": sh_rest, "sh_degree": max(degree, 0), "n_vertices": n,
+            "colors": colors, "has_colors": has_colors}
 
 
 def load_pt_bytes(data: bytes) -> Dict[str, Any]:
@@ -186,6 +214,11 @@ def load_pt_bytes(data: bytes) -> Dict[str, Any]:
             frame["sh_rest"] = sr.reshape((frame["n_vertices"], -1, 3))
         elif sr.ndim == 3 and sr.shape[0] == frame["n_vertices"]:
             frame["sh_rest"] = sr.reshape((frame["n_vertices"], -1, 3))
+    # Re-check explicit RGB after flattening nested checkpoints and normalise
+    # common 0..255 tensors without changing the SH values used for export.
+    if isinstance(obj, dict):
+        frame["colors"] = _normalise_rgb(_field(obj, ["colors", "rgb", "color"]), frame["n_vertices"])
+        frame["has_colors"] = frame["colors"] is not None
     frame["sh_degree"] = int(obj.get("sh_degree", frame.get("sh_degree", 0))) if isinstance(obj, dict) else frame.get("sh_degree", 0)
     return frame
 
@@ -572,6 +605,19 @@ def _raw_pointcloud_arrays(frame: int = 0) -> Tuple[np.ndarray, np.ndarray, np.n
     return np.concatenate(xyz_chunks, axis=0), np.concatenate(color_chunks, axis=0), np.concatenate(id_chunks, axis=0)
 
 
+def _comparison_colors(source: Dict[str, Any]) -> np.ndarray:
+    """Return explicit RGB when available, otherwise SH-derived or neutral gray."""
+    colors = source.get("colors") if source.get("has_colors") else None
+    if colors is not None:
+        normalised = _normalise_rgb(colors, int(source.get("n_vertices", 0)))
+        if normalised is not None:
+            return normalised
+    sh0 = np.asarray(source.get("sh0"), dtype=np.float64)
+    if sh0.shape == (int(source.get("n_vertices", 0)), 3):
+        return sh_to_rgb(sh0)
+    return np.full((int(source.get("n_vertices", 0)), 3), 0.5, dtype=np.float64)
+
+
 @app.get("/")
 def index():
     editor_path = os.path.join(BASE_DIR, "static", "editor.html")
@@ -769,6 +815,77 @@ def api_pointcloud():
     buf.write(np.asarray(part_ids, dtype="<i4").tobytes(order="C"))
     buf.seek(0)
     return Response(buf.read(), mimetype="application/octet-stream")
+
+
+@app.post("/api/comparison")
+def api_comparison_upload():
+    """Create an isolated two-cloud comparison session."""
+    files = request.files.getlist("files")
+    if not files:
+        files = request.files.getlist("file")
+    if len(files) != 2:
+        return jsonify({"error": "Comparison requires exactly two .ply or .pt files"}), 400
+
+    parsed = []
+    try:
+        for uploaded in files:
+            filename = os.path.basename(uploaded.filename or "")
+            extension = os.path.splitext(filename)[1].lower()
+            if not filename or extension not in (".ply", ".pt"):
+                raise ValueError(f"Unsupported file type: {filename or '<unnamed>'}")
+            payload = uploaded.read()
+            if not payload:
+                raise ValueError(f"Empty point-cloud file: {filename}")
+            source = load_ply_bytes(payload) if extension == ".ply" else load_pt_bytes(payload)
+            if int(source.get("n_vertices", 0)) <= 0:
+                raise ValueError(f"Point-cloud file has no vertices: {filename}")
+            parsed.append((filename, source))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    with STATE_LOCK:
+        COMPARISON_STATE["clouds"] = {
+            cloud_id: {
+                "filename": filename,
+                "source": source,
+                "n_vertices": int(source["n_vertices"]),
+                "has_colors": bool(source.get("has_colors", False)),
+            }
+            for cloud_id, (filename, source) in zip(("a", "b"), parsed)
+        }
+        clouds = [
+            {"id": cloud_id, "filename": info["filename"], "n_vertices": info["n_vertices"],
+             "has_colors": info["has_colors"]}
+            for cloud_id, info in COMPARISON_STATE["clouds"].items()
+        ]
+    return jsonify({"ok": True, "clouds": clouds})
+
+
+@app.get("/api/comparison/<cloud_id>")
+def api_comparison_cloud(cloud_id: str):
+    if cloud_id not in ("a", "b"):
+        return jsonify({"error": "cloud_id must be 'a' or 'b'"}), 400
+    with STATE_LOCK:
+        info = COMPARISON_STATE["clouds"].get(cloud_id)
+        if not info:
+            return jsonify({"error": "No comparison session is loaded"}), 400
+        source = info["source"]
+        xyz = np.asarray(source["xyz"], dtype="<f4")
+        colors = np.asarray(_comparison_colors(source), dtype="<f4")
+    if len(xyz) != len(colors):
+        return jsonify({"error": "Comparison point-cloud color length mismatch"}), 500
+    buf = io.BytesIO()
+    buf.write(struct.pack("<I", int(len(xyz))))
+    buf.write(xyz.tobytes(order="C"))
+    buf.write(colors.tobytes(order="C"))
+    return Response(buf.getvalue(), mimetype="application/octet-stream")
+
+
+@app.delete("/api/comparison")
+def api_comparison_delete():
+    with STATE_LOCK:
+        COMPARISON_STATE["clouds"] = {"a": None, "b": None}
+    return jsonify({"ok": True})
 
 
 @app.get("/api/parts")

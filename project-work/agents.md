@@ -82,3 +82,19 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
   still moved.
 - `loadPointCloud()` now parses both active binary endpoints with metadata enabled. `/api/frame` is
   selected only for 4DGS workspaces, where it also carries colors and Part IDs.
+
+## Comparison Notes (2026-08-18)
+
+- Comparison is isolated from `STATE` through `COMPARISON_STATE`; it never changes the active Parts,
+  keyframes, timeline, or export state.
+- `POST /api/comparison` accepts exactly two multipart `files` (`.ply` or `.pt`) and returns metadata.
+  `GET /api/comparison/a` and `/api/comparison/b` emit little-endian `count + xyz + rgb` binary payloads;
+  `DELETE /api/comparison` clears the session.
+- Canonical PLY/PT frames retain `colors` and `has_colors` metadata. Comparison prefers explicit RGB,
+  then SH DC conversion, then neutral gray. Existing editor uploads continue using their established
+  Part/SH color behavior.
+- `static/editor.html` keeps `comparisonPointsA` and `comparisonPointsB` in the same Three.js scene and
+  camera. Comparison mode hides editor-only controls and the original point object, supports A/B checkboxes
+  plus A-only/B-only/Both shortcuts, and disposes comparison geometry/materials on exit.
+- Mobile comparison mode overrides the legacy hidden left sidebar with a scrollable overlay panel so the
+  two file inputs and visibility controls remain reachable at narrow widths.
