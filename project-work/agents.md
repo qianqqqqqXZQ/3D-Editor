@@ -123,6 +123,13 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 - Frontend verification includes Node syntax parsing, Flask compile/startup checks, desktop and `390x844`
   browser layout/lifecycle checks, console error inspection, and `git diff --check`.
 
+## Comparison Dual View Visibility Fix (2026-08-18)
+
+- Switching from `A only` or `B only` to Dual view previously let a pane clone inherit the source point
+  object's `visible=false` state, leaving that pane without a point cloud.
+- `createDualPane`, `ensureDualView`, and Dual-mode visibility refresh now force pane point objects visible.
+  Single-view A/B visibility remains controlled by `comparisonVisibility`; Dual view always shows both clouds.
+
 ## Raw Tensor PT Notes (2026-08-18)
 
 - `load_pt_bytes` accepts a raw `torch.Tensor` saved directly with `torch.save` when it is two-dimensional

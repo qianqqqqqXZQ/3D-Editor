@@ -187,3 +187,20 @@ py -3.13 -m py_compile app.py
 - `git diff --check`
 - Focused review confirmed raw Tensor handling is isolated before gsplat dict/list normalization and leaves
   existing checkpoint schemas unchanged.
+
+## Bugfix: Dual view cloud visibility (2026-08-18)
+
+- [x] Create a recoverable Git checkpoint before the visibility fix (`b9a4495`).
+- [x] Ensure a Dual view pane cannot inherit a hidden source cloud from A-only or B-only single-view state.
+- [x] Ensure reused Dual view pane objects are made visible whenever Dual view is activated.
+- [x] Run JavaScript/backend checks, browser mode-transition regression coverage, and a focused code review.
+
+2026-08-18 verification completed:
+
+- Active `static/editor.html` script parsed with Node `--check`.
+- `py -3.13 -m py_compile app.py` and `git diff --check`.
+- In-app browser upload checks using two raw Tensor PT clouds: `B only -> Dual view` retained Cloud A in the
+  left pane, and `A only -> Dual view` retained Cloud B in the right pane. Both canvas elements had valid
+  dimensions and the browser reported no warnings or errors.
+- Focused review confirmed single-view visibility semantics still apply only outside Dual view, while both
+  Dual view pane objects are explicitly visible on creation and reuse.
