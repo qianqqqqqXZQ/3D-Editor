@@ -221,3 +221,15 @@ py -3.13 -m py_compile app.py
 - Browser download produced `comparison_transform_a.transformed.ply`; binary parsing verified two vertices at
   `(4,-1,0)` and `(4,1,0)` with the expected red/green RGB bytes.
 - Browser console reported no warnings or errors; the change does not add a backend API or mutate editor state.
+
+## Follow-up: Comparison transform sliders (2026-08-18)
+
+- [x] Add range sliders for Comparison TX/TY/TZ (`-5..5`) and RX/RY/RZ (`-180..180`).
+- [x] Synchronize each slider bidirectionally with its numeric input and existing transform/export state.
+- [x] Verify slider-to-number, number-to-slider, and independent A/B transform values in the browser.
+
+2026-08-18 verification completed:
+
+- Browser Comparison fixture showed six transform sliders with the expected ranges.
+- Dragging TX/RZ set both range and number values to `3`/`90`; switching to Cloud B left those values independent,
+  and returning to A restored them. Numeric `TY=-2` input updated its slider, with no browser warnings/errors.

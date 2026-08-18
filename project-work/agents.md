@@ -138,6 +138,8 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
   view reflect the selected cloud without changing the editor `STATE` or backend comparison session.
 - `Export selected .ply` downloads a binary little-endian PLY containing transformed float32 XYZ and uint8 RGB;
   it is a browser-local download and leaves original uploaded files untouched.
+- Comparison transform controls expose both range sliders and numeric inputs. Translation sliders use `-5..5`
+  with `.01` steps; rotation sliders use `-180..180` with `.5` degree steps, and both input types stay synchronized.
 
 ## Raw Tensor PT Notes (2026-08-18)
 

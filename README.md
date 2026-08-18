@@ -144,7 +144,8 @@ The UI uses the following REST endpoints, which can also be called from scripts:
 
 Comparison mode also provides client-side Cloud A/B transforms. Select a cloud, edit TX/TY/TZ and RX/RY/RZ
 (rotation uses the cloud centroid and the editor's ZYX order), then use **Export selected .ply** to download
-the transformed cloud as a binary PLY containing XYZ and RGB.
+the transformed cloud as a binary PLY containing XYZ and RGB. Each transform field has a range slider and a
+numeric input; translation ranges from `-5` to `5`, and rotation ranges from `-180` to `180` degrees.
 
 ### Development Checks
 
@@ -299,7 +300,8 @@ docker run --rm -p 5011:5011 -v /path/to/frames:/data/frames 3d-editor
 - `POST /api/export`、`GET /api/export/status`、`POST /api/export_current`：导出数据。
 
 Comparison 模式支持分别选择 Cloud A 或 Cloud B，编辑 TX/TY/TZ 与 RX/RY/RZ（围绕点云中心、使用编辑器的 ZYX
-旋转顺序），并通过 **Export selected .ply** 下载包含 XYZ 与 RGB 的二进制 PLY；该导出在浏览器本地完成。
+旋转顺序），并通过 **Export selected .ply** 下载包含 XYZ 与 RGB 的二进制 PLY；每个变换字段都同时提供滑块和
+数字输入，平移范围为 `-5` 至 `5`，旋转范围为 `-180` 至 `180` 度，导出在浏览器本地完成。
 
 ### 开发检查
 
