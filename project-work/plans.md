@@ -170,3 +170,20 @@ py -3.13 -m py_compile app.py
 - `git diff --check`
 - Focused review covered renderer disposal, shared point geometry ownership, camera sync recursion guards,
   mode transitions, and responsive CSS ordering.
+
+## Current Request: Raw Tensor PT support (2026-08-18)
+
+- [x] Create a recoverable Git checkpoint before adding raw Tensor parsing (`d9a88df`).
+- [x] Extend `load_pt_bytes` to accept raw `torch.Tensor` payloads with shape `(N, >=3)`.
+- [x] Map the first three columns to coordinates, the next three columns to optional RGB, and ignore later columns.
+- [x] Reuse RGB normalization for raw tensors and reject invalid tensor shapes with a clear error.
+- [x] Run raw Tensor parsing tests, compilation, repository checks, and a focused code review.
+
+2026-08-18 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- In-memory `torch.save`/`load_pt_bytes` checks for `(N,7)` RGB plus ignored columns, `(N,3)` coordinates,
+  RGB normalization, and invalid one-/two-dimensional tensors.
+- `git diff --check`
+- Focused review confirmed raw Tensor handling is isolated before gsplat dict/list normalization and leaves
+  existing checkpoint schemas unchanged.

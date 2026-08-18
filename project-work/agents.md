@@ -122,3 +122,12 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
   controls, renderers, and helper resources before refreshing the editor.
 - Frontend verification includes Node syntax parsing, Flask compile/startup checks, desktop and `390x844`
   browser layout/lifecycle checks, console error inspection, and `git diff --check`.
+
+## Raw Tensor PT Notes (2026-08-18)
+
+- `load_pt_bytes` accepts a raw `torch.Tensor` saved directly with `torch.save` when it is two-dimensional
+  with at least three columns. Columns 0..2 become `xyz`; columns 3..5 become explicit RGB when present;
+  columns 6 and above are intentionally ignored.
+- Raw RGB uses the existing `_normalise_rgb` behavior, converting common 0..255 values to clipped 0..1.
+- Invalid raw Tensor shapes raise `ValueError("Raw .pt tensors must have shape (N, >=3).")`; gsplat dict/list
+  payload handling remains unchanged.

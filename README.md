@@ -10,7 +10,7 @@
 
 ### Features
 
-- Load `.ply` point clouds and `.pt` gsplat checkpoints.
+- Load `.ply` point clouds, `.pt` gsplat checkpoints, and raw `.pt` tensors with rows shaped `(N, >=3)`.
 - Append additional `.ply` or `.pt` files into the current static workspace. Spherical-harmonic (SH) tensors are padded to a common degree when needed.
 - Load a server-side directory of sorted `.pt` frames as a 4DGS Part, with optional looping when the source sequence is shorter than the editor timeline.
 - Orbit, zoom, and frame the scene in a local Three.js/WebGL viewport. Switch to rectangle selection to select static vertices.
@@ -125,7 +125,7 @@ Use `/data/frames` as the server directory in the editor's **4DGS Dir** dialog.
 ### Supported Data
 
 - **PLY:** vertex positions (`x`, `y`, `z`), optional `red`/`green`/`blue`, Gaussian rotations, scales, opacity, and spherical-harmonic fields.
-- **PT:** flat or nested gsplat checkpoints containing fields such as `means`, `quats`, `scales`, `opacities`, `sh0`, and `shN`. A checkpoint containing a `frames` list uses its first frame for static upload.
+- **PT:** flat or nested gsplat checkpoints containing fields such as `means`, `quats`, `scales`, `opacities`, `sh0`, and `shN`. A checkpoint containing a `frames` list uses its first frame for static upload. A raw `torch.Tensor` with shape `(N, >=3)` uses columns 0..2 as coordinates, columns 3..5 as optional RGB (automatically normalized), and ignores later columns.
 - **4DGS directory:** a directory containing `.pt` files. Files are sorted by filename and treated as source frames. The editor pads SH data to the maximum degree in the sequence.
 
 Display colors for SH-only data are derived from the DC coefficient. Part colors are shown in the viewport and are preserved in the editor state; the raw point-cloud endpoint intentionally returns source positions so transform preview remains client-side.
@@ -168,7 +168,7 @@ Thanks to Codex for providing vibe-coding support throughout the development of 
 
 ### 功能
 
-- 加载 `.ply` 点云和 `.pt` gsplat checkpoint。
+- 加载 `.ply` 点云、`.pt` gsplat checkpoint，以及每行形状为 `(N, >=3)` 的裸 `.pt` Tensor。
 - 向当前静态工作区追加多个 `.ply` 或 `.pt` 文件；需要时会把球谐（SH）张量补齐到统一阶数。
 - 从服务器目录加载按文件名排序的 `.pt` 帧序列作为 4DGS Part；当源序列短于编辑时间线时可选择循环播放。
 - 在 Three.js/WebGL 视口中旋转、缩放和自动取景，并切换到矩形框选模式选择静态顶点。
@@ -279,7 +279,7 @@ docker run --rm -p 5011:5011 -v /path/to/frames:/data/frames 3d-editor
 ### 支持的数据格式
 
 - **PLY：** 顶点位置（`x`、`y`、`z`），可选的 `red`/`green`/`blue`、Gaussian 旋转、尺度、不透明度和球谐字段。
-- **PT：** 支持包含 `means`、`quats`、`scales`、`opacities`、`sh0`、`shN` 等字段的扁平或嵌套 gsplat checkpoint。包含 `frames` 列表的 checkpoint 在静态上传时使用第一帧。
+- **PT：** 支持包含 `means`、`quats`、`scales`、`opacities`、`sh0`、`shN` 等字段的扁平或嵌套 gsplat checkpoint。包含 `frames` 列表的 checkpoint 在静态上传时使用第一帧。裸 `torch.Tensor` 需为 `(N, >=3)`，前 3 列作为坐标，第 4 至第 6 列作为可选 RGB（自动归一化），后续列忽略。
 - **4DGS 目录：** 包含多个 `.pt` 文件的目录。文件按文件名排序并作为源帧读取，SH 数据会补齐到序列中的最高阶数。
 
 只有 SH 数据的点会根据 DC 系数计算显示颜色。Part 颜色用于视口显示并保存在编辑器状态中；原始点云接口刻意返回源位置，因此变换预览由浏览器端完成。

@@ -192,6 +192,14 @@ def load_pt_bytes(data: bytes) -> Dict[str, Any]:
     if torch is None:
         raise RuntimeError("PyTorch is required to read .pt files. Install torch first.")
     obj = torch.load(io.BytesIO(data), map_location="cpu", weights_only=False)
+    if isinstance(obj, torch.Tensor):
+        if obj.ndim != 2 or obj.shape[1] < 3:
+            raise ValueError("Raw .pt tensors must have shape (N, >=3).")
+        # Raw tensors are simple point rows: xyz, optional RGB, then ignored fields.
+        raw = obj.detach().cpu().numpy()
+        obj = {"xyz": raw[:, :3]}
+        if raw.shape[1] >= 6:
+            obj["colors"] = raw[:, 3:6]
     if isinstance(obj, dict) and "frames" in obj and isinstance(obj["frames"], (list, tuple)):
         obj = obj["frames"][0]
     if isinstance(obj, dict) and isinstance(obj.get("splats"), dict):
