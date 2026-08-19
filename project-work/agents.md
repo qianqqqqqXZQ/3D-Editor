@@ -179,5 +179,5 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
   geometries, and uses transformed coordinates for PLY export.
 - `POST /api/comparison/evaluate` accepts optional `transforms.a.scale` and `transforms.b.scale`; omitted scale
   remains backward compatible. Markdown reports include the applied scale column and invalid scales return HTTP 400.
-- Scale controls use `0.1..5` with `.01` steps. The editor control is hidden in Comparison mode; Comparison
+- Scale controls use `0.1..10` with `.01` steps. The editor control is hidden in Comparison mode; Comparison
   exposes one Scale range/number pair for the selected Cloud A or Cloud B.
