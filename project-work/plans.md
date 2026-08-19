@@ -1,5 +1,21 @@
 # Part-Level 4DGS Animation Editor Plan
 
+## Current Request: English Repository Description (2026-08-19)
+
+- [x] Inspect the active Flask and Three.js implementation to establish the supported editing, comparison, evaluation, and export capabilities.
+- [x] Create a recoverable Git checkpoint before replacing repository documentation (`50b742c`).
+- [x] Rewrite the root README as a polished, English-first GitHub repository description that reflects the implemented product.
+- [x] Verify documentation consistency, review the changed files, and record the final validation.
+
+2026-08-19 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- README content check confirmed the product description, Part editing, 4DGS, comparison, metrics,
+  setup, REST API, and background sections. The rewritten README contains no non-ASCII characters.
+- `git diff --check`
+- Focused documentation review matched every named workflow to the active Flask routes and Three.js UI,
+  including keyframe interpolation, A/B dual view, centroid-based transforms, evaluation, and both export paths.
+
 ## Baseline
 
 - [x] Establish `project-work/` for working documents and `generated/` for generated exports.

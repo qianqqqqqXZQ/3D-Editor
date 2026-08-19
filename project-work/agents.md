@@ -9,7 +9,7 @@ the root route serves the static editor when it is present.
 
 ## Layout
 
-- `README.md`: English-first project documentation with a Chinese language section.
+- `README.md`: Polished English-first GitHub overview covering Part editing, 4DGS workflows, Cloud A/B comparison, evaluation, setup, and exports.
 - `app.py`: Flask application, `STATE`, PLY/PT readers, Part/keyframe/4DGS APIs, and fallback UI.
 - `static/`: local Three.js r128 and OrbitControls assets.
 - `static/editor.html`: active Three.js editor, binary point-cloud parser, immutable source-position preview, and responsive controls.
@@ -41,6 +41,13 @@ python app.py
 ```
 
 The server listens on `http://localhost:5011`.
+
+Documentation verification:
+
+```powershell
+py -3.13 -m py_compile app.py
+git diff --check
+```
 
 Export path inputs are resolved on the server with user-home and environment-variable expansion,
 so Linux inputs such as `~/Desktop/delete` produce `~/Desktop/delete.pt` for current-frame export.
