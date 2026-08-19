@@ -507,6 +507,15 @@ def _clean_scale(value: Any = 1.0) -> float:
     return scale
 
 
+def _resolve_user_path(value: str) -> str:
+    """Resolve a path entered in the UI to the server's local absolute path.
+
+    ``expanduser`` handles Linux inputs such as ``~/Desktop/delete`` and
+    ``expandvars`` handles common ``$HOME``/``%USERPROFILE%`` forms.
+    """
+    return os.path.abspath(os.path.expanduser(os.path.expandvars(value.strip())))
+
+
 def _scale_xyz_about_centroid(xyz: np.ndarray, scale: float) -> np.ndarray:
     """Scale XYZ around its own centroid without mutating the input array."""
     points = np.asarray(xyz, dtype=np.float64).reshape((-1, 3))
@@ -1399,6 +1408,7 @@ def api_export():
     output_dir = body.get("output_dir")
     if not isinstance(output_dir, str) or not output_dir.strip():
         return jsonify({"error": "output_dir is required"}), 400
+    output_dir = _resolve_user_path(output_dir)
     try:
         scale = _clean_scale(body.get("scale", 1.0))
     except ValueError as exc:
@@ -1451,6 +1461,7 @@ def api_export_current_v2():
     output_path = body.get("output_path")
     if not isinstance(output_path, str) or not output_path.strip():
         return jsonify({"error": "output_path is required"}), 400
+    output_path = output_path.strip()
     try:
         frame = int(body.get("frame", 0))
     except (TypeError, ValueError):
@@ -1464,7 +1475,7 @@ def api_export_current_v2():
             return jsonify({"error": "No point-cloud data is loaded"}), 400
         frame = max(0, min(frame, max(0, STATE["num_frames"] - 1)))
         output_path = output_path if output_path.lower().endswith(".pt") else output_path + ".pt"
-        output_path = os.path.abspath(output_path)
+        output_path = _resolve_user_path(output_path)
         try:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
             payload = _export_frame_payload(frame, scale=scale)

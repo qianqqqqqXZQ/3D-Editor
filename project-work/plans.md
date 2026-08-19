@@ -285,3 +285,19 @@ py -3.13 -m py_compile app.py
 - `git diff --check`
 - Focused review covered scale order, immutable source positions, export parameter capture, report compatibility,
   Dual-pane geometry synchronization, and Comparison/editor state isolation.
+
+## Current Request: Expand local export paths (2026-08-19)
+
+- [x] Resolve `~`, environment variables, and relative paths before writing point-cloud exports.
+- [x] Apply the resolved path to both current-frame (`.pt`) and all-frame export endpoints.
+- [x] Run compilation, Flask export-path regression checks, frontend syntax/diff checks, and a focused code review.
+
+2026-08-19 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Flask test-client regression with a temporary simulated home directory confirmed
+  `~/Desktop/delete` writes `delete.pt` and all-frame exports use the expanded directory.
+- Active `static/editor.html` inline scripts parsed with Node `new Function`.
+- `git diff --check`
+- Focused review confirmed both public path-bearing export routes resolve user paths before
+  directory creation or background worker writes, while extension handling remains unchanged.

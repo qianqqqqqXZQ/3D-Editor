@@ -42,6 +42,9 @@ python app.py
 
 The server listens on `http://localhost:5011`.
 
+Export path inputs are resolved on the server with user-home and environment-variable expansion,
+so Linux inputs such as `~/Desktop/delete` produce `~/Desktop/delete.pt` for current-frame export.
+
 ## Linux Compatibility (2026-08-17)
 
 - The backend has no Windows-specific paths or system commands. `app.py` listens on
