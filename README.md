@@ -137,7 +137,7 @@ The browser interface is backed by a small JSON/binary REST API. The principal r
 - `GET/POST/PUT/DELETE /api/parts...` for Part management and vertex assignment
 - `GET/POST/DELETE /api/keyframes/<pid>...` and `GET/PUT /api/settings`
 - `POST /api/comparison`, `GET /api/comparison/a`, `GET /api/comparison/b`, and `POST /api/comparison/evaluate`
-- `POST /api/export`, `GET /api/export/status`, and `POST /api/export_current`
+- `POST /api/export`, `GET /api/export/status`, and `POST /api/export_current` (`color_mode` accepts `original` or `edited`; original source RGB is the default)
 
 Binary point-cloud endpoints return compact XYZ, RGB, and Part-ID payloads for the local renderer. Comparison data is deliberately kept separate from the active editor workspace, so comparison uploads never alter Parts, animation tracks, or editor exports.
 

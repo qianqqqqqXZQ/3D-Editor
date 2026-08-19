@@ -193,3 +193,14 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
   remains backward compatible. Markdown reports include the applied scale column and invalid scales return HTTP 400.
 - Scale controls use `0.1..10` with `.01` steps. The editor control is hidden in Comparison mode; Comparison
   exposes one Scale range/number pair for the selected Cloud A or Cloud B.
+
+## Export Color Mode Notes (2026-08-19)
+
+- Static editor state retains normalized source RGB in `STATE["colors"]` plus a per-point `color_valid` mask;
+  this data survives append and destructive static-point deletion. 4DGS source frames retain their parsed RGB.
+- `POST /api/export_current` and `POST /api/export` accept `color_mode` as `original` (the default) or `edited`.
+  Original mode uses explicit source RGB, then SH DC display conversion, then neutral gray; edited mode uses the
+  selected Part color and keeps unassigned points on the original fallback.
+- Exported checkpoints write the selected RGB array as `colors` at both the top level and inside `splats`, while
+  preserving `means`, `quats`, `scales`, `opacities`, `sh0`, `shN`, and `sh_degree`. The editor preview and
+  Comparison export behavior are unchanged.

@@ -58,6 +58,8 @@ STATE: Dict[str, Any] = {
     "opacities": None,
     "sh0": None,
     "sh_rest": None,
+    "colors": None,
+    "color_valid": None,
     "sh_degree": 0,
     "part_id_array": None,
     "parts": {},
@@ -245,7 +247,7 @@ def load_pt(filepath: str) -> Dict[str, Any]:
         return load_pt_bytes(handle.read())
 
 
-def save_frame_as_pt(xyz, quats, scales, opacities, sh0, sh_rest, sh_degree, filepath):
+def save_frame_as_pt(xyz, quats, scales, opacities, sh0, sh_rest, sh_degree, filepath, colors=None):
     """Write one canonical frame using the gsplat checkpoint schema."""
     if torch is None:
         raise RuntimeError("PyTorch is required to save .pt files")
@@ -257,6 +259,8 @@ def save_frame_as_pt(xyz, quats, scales, opacities, sh0, sh_rest, sh_degree, fil
         "opacities": torch.from_numpy(np.asarray(opacities).reshape(n).astype(np.float32)),
         "sh0": torch.from_numpy(np.asarray(sh0).reshape(n, 3).astype(np.float32)).reshape(n, 1, 3),
     }
+    if colors is not None:
+        splats["colors"] = torch.from_numpy(np.asarray(colors).reshape(n, 3).astype(np.float32))
     if sh_rest is None:
         splats["shN"] = torch.zeros((n, 0, 3), dtype=torch.float32)
     else:
@@ -279,6 +283,24 @@ def _pad_sh_rest(rest, n, target_k):
 def sh_to_rgb(sh0: Any) -> np.ndarray:
     """Convert the DC spherical-harmonic coefficients to clipped RGB."""
     return np.clip(np.asarray(sh0, dtype=np.float64) * C0 + 0.5, 0, 1)
+
+
+def _original_colors(source: Dict[str, Any]) -> np.ndarray:
+    """Return explicit source RGB, falling back to SH DC colors or neutral gray."""
+    count = int(source.get("n_vertices", len(source.get("xyz", []))))
+    fallback = sh_to_rgb(source.get("sh0", np.zeros((count, 3), dtype=np.float64)))
+    if len(fallback) != count:
+        fallback = np.full((count, 3), 0.5, dtype=np.float64)
+    colors = _normalise_rgb(source.get("colors"), count)
+    if colors is None:
+        return fallback
+    valid = source.get("color_valid")
+    if valid is None:
+        valid = np.full(count, bool(source.get("has_colors", False)), dtype=bool)
+    valid = np.asarray(valid, dtype=bool).reshape(count)
+    out = np.array(fallback, dtype=np.float64, copy=True)
+    out[valid] = colors[valid]
+    return out
 
 
 def load_4dgs_dir(dir_path: str) -> Dict[str, Any]:
@@ -409,6 +431,8 @@ def _empty_static_arrays() -> None:
     STATE["opacities"] = np.zeros(0, dtype=np.float64)
     STATE["sh0"] = np.zeros((0, 3), dtype=np.float64)
     STATE["sh_rest"] = np.zeros((0, 0, 3), dtype=np.float64)
+    STATE["colors"] = np.zeros((0, 3), dtype=np.float64)
+    STATE["color_valid"] = np.zeros(0, dtype=bool)
     STATE["part_id_array"] = np.zeros(0, dtype=np.int32)
     STATE["n_vertices"] = 0
 
@@ -418,7 +442,8 @@ def _reset_workspace() -> None:
     STATE.clear()
     STATE.update({
         "loaded": False, "filename": "", "n_vertices": 0, "xyz": None, "quats": None,
-        "scales": None, "opacities": None, "sh0": None, "sh_rest": None, "sh_degree": 0,
+        "scales": None, "opacities": None, "sh0": None, "sh_rest": None, "colors": None,
+        "color_valid": None, "sh_degree": 0,
         "part_id_array": None, "parts": {}, "next_part_id": 0, "tracks": {}, "num_frames": 30,
         "interpolation_method": "linear", "export_progress": -1, "export_dir": None,
         "export_done": False, "export_active": False, "4dgs_parts": {},
@@ -437,6 +462,16 @@ def _combine_static_frames(frames: List[Dict[str, Any]], target_degree: int) -> 
     """Concatenate canonical frames after padding each SH tensor to one degree."""
     target_k = max(0, (int(target_degree) + 1) ** 2 - 1)
     n_vertices = sum(int(frame["n_vertices"]) for frame in frames)
+    source_colors = []
+    source_color_valid = []
+    for frame in frames:
+        count = int(frame["n_vertices"])
+        colors = _normalise_rgb(frame.get("colors"), count)
+        source_colors.append(colors if colors is not None else np.zeros((count, 3), dtype=np.float64))
+        valid = frame.get("color_valid")
+        if valid is None:
+            valid = np.full(count, bool(frame.get("has_colors", False)), dtype=bool)
+        source_color_valid.append(np.asarray(valid, dtype=bool).reshape(count))
     return {
         "xyz": np.concatenate([frame["xyz"] for frame in frames], axis=0),
         "quats": np.concatenate([frame["quats"] for frame in frames], axis=0),
@@ -446,11 +481,13 @@ def _combine_static_frames(frames: List[Dict[str, Any]], target_degree: int) -> 
         "sh_rest": np.concatenate([_pad_sh_rest(frame.get("sh_rest"), frame["n_vertices"], target_k) for frame in frames], axis=0),
         "sh_degree": int(target_degree),
         "n_vertices": n_vertices,
+        "colors": np.concatenate(source_colors, axis=0),
+        "color_valid": np.concatenate(source_color_valid, axis=0),
     }
 
 
 def _static_frame_from_state() -> Dict[str, Any]:
-    return {key: STATE[key] for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "sh_degree", "n_vertices")}
+    return {key: STATE[key] for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "sh_degree", "n_vertices", "colors", "color_valid")}
 
 
 def _remove_static_indices_from_parts(indices: List[int]) -> None:
@@ -471,7 +508,7 @@ def _delete_static_vertices(indices: List[int]) -> int:
     old_to_new = np.full(count, -1, dtype=np.int32)
     old_to_new[keep] = np.arange(int(np.count_nonzero(keep)), dtype=np.int32)
 
-    for field in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "part_id_array"):
+    for field in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "colors", "color_valid", "part_id_array"):
         values = STATE.get(field)
         if values is not None:
             STATE[field] = np.asarray(values)[keep]
@@ -572,7 +609,7 @@ def _key_for(pid: int, frame: int) -> Dict[str, float]:
 
 
 def _write_pt(path: str, frame: Dict[str, Any]) -> None:
-    save_frame_as_pt(frame["xyz"], frame["quats"], frame["scales"], frame["opacities"], frame["sh0"], frame.get("sh_rest"), frame.get("sh_degree", 0), path)
+    save_frame_as_pt(frame["xyz"], frame["quats"], frame["scales"], frame["opacities"], frame["sh0"], frame.get("sh_rest"), frame.get("sh_degree", 0), path, colors=frame.get("colors"))
 
 
 def compute_frame_data(frame: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -599,7 +636,7 @@ def compute_full_frame_data(frame: int, apply_transforms: bool = True) -> Dict[s
 
 def frame_data(frame: int, apply_transforms: bool = True) -> Dict[str, Any]:
     with STATE_LOCK:
-        xyzs, quats, scales, opacities, sh0s, rests, cols, ids, source_indices = [], [], [], [], [], [], [], [], []
+        xyzs, quats, scales, opacities, sh0s, rests, cols, original_cols, ids, source_indices = [], [], [], [], [], [], [], [], [], []
         claimed_static = np.zeros(int(STATE.get("n_vertices", 0)), dtype=bool)
         for pid, part in STATE["parts"].items():
             if part.get("is_4dgs"):
@@ -610,13 +647,13 @@ def frame_data(frame: int, apply_transforms: bool = True) -> Dict[str, Any]:
                 idx = sorted(part.get("vertex_indices", set()))
                 if not idx or STATE["xyz"] is None: continue
                 claimed_static[idx] = True
-                src = {k: STATE[k][idx] if k != "sh_rest" and STATE[k] is not None else (STATE[k][idx] if STATE[k] is not None else None)
-                       for k in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest")}
+                src = {k: STATE[k][idx] if STATE[k] is not None else None
+                       for k in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "colors", "color_valid")}
                 src["sh_degree"] = STATE["sh_degree"]
             key = _key_for(pid, frame) if apply_transforms else {"tx": 0.0, "ty": 0.0, "tz": 0.0, "rx": 0.0, "ry": 0.0, "rz": 0.0}
             xyzs.append(_transform_xyz(src["xyz"], part["pivot"], key)); quats.append(_rotate_quats(src["quats"], key))
             scales.append(src["scales"]); opacities.append(src["opacities"]); sh0s.append(src["sh0"])
-            rests.append(src.get("sh_rest")); cols.append(np.tile(part["color"], (len(src["xyz"]), 1))); ids.append(np.full(len(src["xyz"]), pid))
+            rests.append(src.get("sh_rest")); cols.append(np.tile(part["color"], (len(src["xyz"]), 1))); original_cols.append(_original_colors(src)); ids.append(np.full(len(src["xyz"]), pid))
             source_indices.append(np.asarray(idx, dtype=np.int32) if idx is not None else np.full(len(src["xyz"]), -1))
         # Deleted or never-assigned static vertices remain part of the point cloud.
         # Keep them in frame/export responses with their source SH-derived color.
@@ -624,22 +661,22 @@ def frame_data(frame: int, apply_transforms: bool = True) -> Dict[str, Any]:
             unassigned = np.flatnonzero(~claimed_static)
             if len(unassigned):
                 src = {k: STATE[k][unassigned] if STATE[k] is not None else None
-                       for k in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest")}
+                       for k in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "colors", "color_valid")}
                 src["sh_degree"] = STATE["sh_degree"]
                 identity = {"tx": 0.0, "ty": 0.0, "tz": 0.0, "rx": 0.0, "ry": 0.0, "rz": 0.0}
                 xyzs.append(_transform_xyz(src["xyz"], [0.0, 0.0, 0.0], identity) if apply_transforms else src["xyz"])
                 quats.append(src["quats"]); scales.append(src["scales"]); opacities.append(src["opacities"])
-                sh0s.append(src["sh0"]); rests.append(src.get("sh_rest")); cols.append(sh_to_rgb(src["sh0"]))
+                sh0s.append(src["sh0"]); rests.append(src.get("sh_rest")); cols.append(_original_colors(src)); original_cols.append(_original_colors(src))
                 ids.append(np.full(len(unassigned), -1, dtype=np.int32)); source_indices.append(unassigned.astype(np.int32))
         if not xyzs:
             return {"xyz": np.zeros((0,3)), "quats": np.zeros((0,4)), "scales": np.zeros((0,3)), "opacities": np.zeros(0),
-                    "sh0": np.zeros((0,3)), "sh_rest": None, "sh_degree": 0, "colors": np.zeros((0,3)), "part_ids": np.zeros(0, dtype=np.int32), "source_indices": np.zeros(0, dtype=np.int32), "frame": frame}
+                    "sh0": np.zeros((0,3)), "sh_rest": None, "sh_degree": 0, "colors": np.zeros((0,3)), "original_colors": np.zeros((0,3)), "part_ids": np.zeros(0, dtype=np.int32), "source_indices": np.zeros(0, dtype=np.int32), "frame": frame}
         max_degree = max([STATE["sh_degree"]] + [STATE["4dgs_parts"][p]["sh_degree"] for p in STATE["4dgs_parts"]])
         target_k = max(0, (max_degree + 1) ** 2 - 1)
         combined_rest = np.concatenate([_pad_sh_rest(r, len(xyzs[i]), target_k) for i, r in enumerate(rests)], axis=0) if target_k else np.zeros((sum(len(x) for x in xyzs), 0, 3), dtype=np.float64)
         return {"xyz": np.concatenate(xyzs), "quats": np.concatenate(quats), "scales": np.concatenate(scales), "opacities": np.concatenate(opacities),
                 "sh0": np.concatenate(sh0s), "sh_rest": combined_rest, "sh_degree": max_degree,
-                "colors": np.concatenate(cols), "part_ids": np.concatenate(ids), "source_indices": np.concatenate(source_indices), "frame": frame}
+                "colors": np.concatenate(cols), "original_colors": np.concatenate(original_cols), "part_ids": np.concatenate(ids), "source_indices": np.concatenate(source_indices), "frame": frame}
 
 
 def frame_payload(frame: int) -> Dict[str, Any]:
@@ -742,9 +779,11 @@ def api_upload():
     parsed["sh_degree"] = max(p["sh_degree"] for _, p in parsed_files)
     parsed["sh_rest"] = np.concatenate([_pad_sh_rest(p.get("sh_rest"), p["n_vertices"], max(0, (parsed["sh_degree"] + 1) ** 2 - 1)) for _, p in parsed_files], axis=0)
     parsed["n_vertices"] = len(parsed["xyz"])
+    parsed["colors"] = np.concatenate([_original_colors(source) for _, source in parsed_files], axis=0)
+    parsed["color_valid"] = np.concatenate([np.full(source["n_vertices"], bool(source.get("has_colors", False)), dtype=bool) for _, source in parsed_files], axis=0)
     with STATE_LOCK:
         _reset_workspace()
-        for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest"): STATE[key] = parsed[key]
+        for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "colors", "color_valid"): STATE[key] = parsed[key]
         STATE["sh_degree"], STATE["n_vertices"], STATE["filename"], STATE["loaded"] = parsed["sh_degree"], parsed["n_vertices"], first, True
         STATE["part_id_array"] = np.full(parsed["n_vertices"], -1, dtype=np.int32); STATE["parts"].clear(); STATE["tracks"].clear(); STATE["4dgs_parts"].clear(); STATE["next_part_id"] = 0
         offset = 0
@@ -798,7 +837,7 @@ def api_upload_append():
         previous_count = int(STATE["n_vertices"])
         target_degree = max([int(STATE["sh_degree"])] + [int(source["sh_degree"]) for _, source in parsed_files])
         combined = _combine_static_frames([_static_frame_from_state()] + [source for _, source in parsed_files], target_degree)
-        for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest"):
+        for key in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "colors", "color_valid"):
             STATE[key] = combined[key]
         STATE["n_vertices"] = combined["n_vertices"]
         STATE["sh_degree"] = target_degree
@@ -1440,10 +1479,18 @@ def api_frame_transforms(frame):
     return jsonify(payload)
 
 
-def _export_frame_payload(frame: int, scale: float = 1.0) -> Dict[str, Any]:
+def _clean_color_mode(value: Any = "original") -> str:
+    mode = str(value or "original").strip().lower()
+    if mode not in ("original", "edited"):
+        raise ValueError("color_mode must be either 'original' or 'edited'")
+    return mode
+
+
+def _export_frame_payload(frame: int, scale: float = 1.0, color_mode: str = "original") -> Dict[str, Any]:
     """Build one exportable frame, including 4DGS attributes when present."""
     payload = compute_full_frame_data(frame, apply_transforms=True)
     payload["xyz"] = _scale_xyz_about_centroid(payload["xyz"], scale)
+    payload["colors"] = payload["original_colors"] if color_mode == "original" else payload["colors"]
     return payload
 
 
@@ -1456,6 +1503,7 @@ def api_export():
     output_dir = _resolve_user_path(output_dir)
     try:
         scale = _clean_scale(body.get("scale", 1.0))
+        color_mode = _clean_color_mode(body.get("color_mode", "original"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     with STATE_LOCK:
@@ -1476,7 +1524,7 @@ def api_export():
     def worker():
         try:
             for index in range(frame_count):
-                payload = _export_frame_payload(index, scale=scale)
+                payload = _export_frame_payload(index, scale=scale, color_mode=color_mode)
                 _write_pt(os.path.join(output_dir, f"frame_{index:04d}.pt"), payload)
                 with STATE_LOCK:
                     STATE["export_progress"] = int((index + 1) * 100 / max(1, frame_count))
@@ -1489,7 +1537,7 @@ def api_export():
                 STATE["export_done"] = STATE["export_progress"] == 100
 
     threading.Thread(target=worker, daemon=True, name="4dgs-export").start()
-    return jsonify({"ok": True, "num_frames": frame_count, "output_dir": os.path.abspath(output_dir)})
+    return jsonify({"ok": True, "num_frames": frame_count, "output_dir": os.path.abspath(output_dir), "color_mode": color_mode})
 
 
 @app.get("/api/export/status")
@@ -1513,6 +1561,7 @@ def api_export_current_v2():
         return jsonify({"error": "frame must be an integer"}), 400
     try:
         scale = _clean_scale(body.get("scale", 1.0))
+        color_mode = _clean_color_mode(body.get("color_mode", "original"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     with STATE_LOCK:
@@ -1523,11 +1572,11 @@ def api_export_current_v2():
         output_path = _resolve_user_path(output_path)
         try:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-            payload = _export_frame_payload(frame, scale=scale)
+            payload = _export_frame_payload(frame, scale=scale, color_mode=color_mode)
             _write_pt(output_path, payload)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
-        return jsonify({"ok": True, "output_path": output_path, "n_vertices": int(payload["n_vertices"]), "frame": frame})
+        return jsonify({"ok": True, "output_path": output_path, "n_vertices": int(payload["n_vertices"]), "frame": frame, "color_mode": color_mode})
 
 
 @app.post("/api/create-part")

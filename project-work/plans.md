@@ -1,5 +1,21 @@
 # Part-Level 4DGS Animation Editor Plan
 
+## Current Request: Export Original or Edited Colors (2026-08-19)
+
+- [x] Create a recoverable Git checkpoint before changing export color handling (`1d21d81`).
+- [x] Preserve per-point source RGB through static uploads, append operations, static deletion, and 4DGS source frames.
+- [x] Add `color_mode` support to current-frame and batch export APIs, defaulting to `original` with explicit RGB, SH DC, and neutral-gray fallback.
+- [x] Write selected RGB values to both top-level and nested `splats.colors` in exported `.pt` checkpoints without changing Gaussian SH attributes.
+- [x] Add default-original color selectors to both editor export dialogs and send the selected mode in their requests.
+- [x] Run compile, export regression, frontend syntax, upload-path, batch-export, diff, and focused-review checks.
+
+2026-08-19 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- In-memory export regression for explicit RGB, SH/neutral fallback, static Part edited colors, 4DGS Part colors, `.pt` top-level/nested `colors`, and invalid `color_mode` rejection.
+- Browser-script syntax parsing, multipart upload/export API regression, asynchronous batch export regression, and `git diff --check`.
+- Focused review of per-point color validity, static/4DGS aggregation, color-mode capture by the export worker, and unchanged preview/Comparison behavior.
+
 ## Current Request: English Repository Description (2026-08-19)
 
 - [x] Inspect the active Flask and Three.js implementation to establish the supported editing, comparison, evaluation, and export capabilities.
