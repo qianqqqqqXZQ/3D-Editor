@@ -27,6 +27,8 @@ except Exception:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPORT_ROOT = os.path.join(BASE_DIR, "generated")
 os.makedirs(EXPORT_ROOT, exist_ok=True)
+EVALUATION_ROOT = os.path.join(EXPORT_ROOT, "evaluations")
+os.makedirs(EVALUATION_ROOT, exist_ok=True)
 UPLOAD_ROOT = os.path.join(tempfile.gettempdir(), "part_level_4dgs_uploads")
 os.makedirs(UPLOAD_ROOT, exist_ok=True)
 
@@ -869,7 +871,7 @@ def api_comparison_upload():
     return jsonify({"ok": True, "clouds": clouds})
 
 
-@app.get("/api/comparison/<cloud_id>")
+@app.get("/api/comparison/<any(a,b):cloud_id>")
 def api_comparison_cloud(cloud_id: str):
     if cloud_id not in ("a", "b"):
         return jsonify({"error": "cloud_id must be 'a' or 'b'"}), 400
@@ -894,6 +896,269 @@ def api_comparison_delete():
     with STATE_LOCK:
         COMPARISON_STATE["clouds"] = {"a": None, "b": None}
     return jsonify({"ok": True})
+
+
+_COMPARISON_METRIC_NAMES = {
+    "accuracy": "Accuracy (Acc.)",
+    "completeness": "Completeness (Comp.)",
+    "chamfer": "Chamfer Distance (CD)",
+    "fscore": "F-Score",
+    "auc": "AUC (Area Under Curve)",
+    "normal_consistency": "Normal Consistency (NC)",
+}
+
+
+def _comparison_transformed_xyz(source: Dict[str, Any], transform: Any) -> np.ndarray:
+    """Apply the frontend Comparison transform around the source centroid."""
+    xyz = np.asarray(source.get("xyz"), dtype=np.float64).reshape((-1, 3))
+    raw = transform if isinstance(transform, dict) else {}
+    values = []
+    for name in ("tx", "ty", "tz", "rx", "ry", "rz"):
+        try:
+            value = float(raw.get(name, 0.0))
+        except (TypeError, ValueError):
+            value = 0.0
+        if not np.isfinite(value):
+            value = 0.0
+        values.append(value)
+    tx, ty, tz, rx, ry, rz = values
+    if not len(xyz):
+        return xyz.copy()
+    pivot = np.mean(xyz, axis=0)
+    rotation = euler_to_rotation_matrix(rx, ry, rz)
+    return (xyz - pivot) @ rotation.T + pivot + np.asarray([tx, ty, tz], dtype=np.float64)
+
+
+def _comparison_nearest(source: np.ndarray, target: np.ndarray, *, return_indices: bool = False,
+                        source_block_size: int = 1024, target_block_size: int = 4096) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """Find exact Euclidean nearest-neighbour distances in bounded memory."""
+    source = np.asarray(source, dtype=np.float64).reshape((-1, 3))
+    target = np.asarray(target, dtype=np.float64).reshape((-1, 3))
+    if len(source) == 0 or len(target) == 0:
+        raise ValueError("Comparison point clouds must not be empty")
+    distances = np.empty(len(source), dtype=np.float64)
+    indices = np.empty(len(source), dtype=np.int64) if return_indices else None
+    for start in range(0, len(source), source_block_size):
+        stop = min(start + source_block_size, len(source))
+        block = source[start:stop]
+        nearest_squared = np.full(stop - start, np.inf, dtype=np.float64)
+        nearest = np.zeros(stop - start, dtype=np.int64)
+        block_sq = np.sum(block * block, axis=1)[:, None]
+        for target_start in range(0, len(target), target_block_size):
+            target_stop = min(target_start + target_block_size, len(target))
+            target_block = target[target_start:target_stop]
+            squared = block_sq + np.sum(target_block * target_block, axis=1)[None, :]
+            squared -= 2.0 * block @ target_block.T
+            squared = np.maximum(squared, 0.0)
+            local = np.argmin(squared, axis=1)
+            local_squared = squared[np.arange(stop - start), local]
+            improved = local_squared < nearest_squared
+            nearest_squared[improved] = local_squared[improved]
+            nearest[improved] = target_start + local[improved]
+        distances[start:stop] = np.sqrt(nearest_squared)
+        if indices is not None:
+            indices[start:stop] = nearest
+    return distances, indices
+
+
+def _comparison_normals(points: np.ndarray, k: int = 16, source_block_size: int = 512,
+                        target_block_size: int = 4096) -> Optional[np.ndarray]:
+    """Estimate unoriented point normals with same-cloud k-neighbour PCA."""
+    points = np.asarray(points, dtype=np.float64).reshape((-1, 3))
+    if len(points) < 3:
+        return None
+    neighbour_count = min(int(k), len(points) - 1)
+    if neighbour_count < 2:
+        return None
+    normals = np.zeros_like(points)
+    stable = True
+    for start in range(0, len(points), source_block_size):
+        stop = min(start + source_block_size, len(points))
+        block = points[start:stop]
+        block_sq = np.sum(block * block, axis=1)[:, None]
+        row_indices = np.arange(start, stop)
+        best_sq = np.full((stop - start, neighbour_count), np.inf, dtype=np.float64)
+        neighbours = np.zeros((stop - start, neighbour_count), dtype=np.int64)
+        for target_start in range(0, len(points), target_block_size):
+            target_stop = min(target_start + target_block_size, len(points))
+            target_block = points[target_start:target_stop]
+            squared = block_sq + np.sum(target_block * target_block, axis=1)[None, :]
+            squared -= 2.0 * block @ target_block.T
+            squared = np.maximum(squared, 0.0)
+            local_rows = row_indices - target_start
+            inside = (local_rows >= 0) & (local_rows < len(target_block))
+            squared[np.flatnonzero(inside), local_rows[inside]] = np.inf
+            take = min(neighbour_count, len(target_block))
+            local = np.argpartition(squared, take - 1, axis=1)[:, :take]
+            local_sq = np.take_along_axis(squared, local, axis=1)
+            combined_sq = np.concatenate((best_sq, local_sq), axis=1)
+            combined_ids = np.concatenate((neighbours, target_start + local), axis=1)
+            best = np.argpartition(combined_sq, neighbour_count - 1, axis=1)[:, :neighbour_count]
+            best_sq = np.take_along_axis(combined_sq, best, axis=1)
+            neighbours = np.take_along_axis(combined_ids, best, axis=1)
+        for row, point_index in enumerate(row_indices):
+            local = points[neighbours[row]] - points[point_index]
+            covariance = local.T @ local / max(1, len(local))
+            try:
+                eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+                normal = eigenvectors[:, int(np.argmin(eigenvalues))]
+                stable = stable and eigenvalues[1] > max(float(eigenvalues[-1]), 1.0) * 1e-12
+            except np.linalg.LinAlgError:
+                normal = np.zeros(3, dtype=np.float64)
+            norm = float(np.linalg.norm(normal))
+            normals[point_index] = normal / norm if norm > 1e-12 else 0.0
+    if not stable or not np.isfinite(normals).all() or np.any(np.linalg.norm(normals, axis=1) < 1e-12):
+        return None
+    return normals
+
+
+def _comparison_fscore(distances_p: np.ndarray, distances_g: np.ndarray, threshold: float) -> Tuple[float, float, float]:
+    precision = float(np.mean(distances_p < threshold))
+    recall = float(np.mean(distances_g < threshold))
+    denominator = precision + recall
+    score = 2.0 * precision * recall / denominator if denominator > 0 else 0.0
+    return precision, recall, score
+
+
+def _comparison_markdown(filename_a: str, filename_b: str, points_a: np.ndarray, points_b: np.ndarray,
+                         transforms: Dict[str, Any], tau: float, tau_max: float, auc_samples: int,
+                         selected: List[str], values: Dict[str, Any], normal_note: Optional[str]) -> str:
+    def fmt(value: Any) -> str:
+        if value is None:
+            return "N/A"
+        if isinstance(value, (float, np.floating)):
+            return f"{float(value):.8f}"
+        return str(value)
+
+    lines = [
+        "# Comparison Evaluation Report",
+        "",
+        "## Dataset",
+        "",
+        f"- **Prediction (Cloud A):** `{filename_a}` ({len(points_a)} points)",
+        f"- **Ground Truth (Cloud B):** `{filename_b}` ({len(points_b)} points)",
+        "- **Evaluation time:** " + __import__("datetime").datetime.now().astimezone().isoformat(timespec="seconds"),
+        "",
+        "## Parameters",
+        "",
+        f"- `tau`: {fmt(tau)}",
+        f"- `tau_max`: {fmt(tau_max)}",
+        f"- AUC samples: `{auc_samples}` equally spaced thresholds",
+        "- Normal estimation: same-cloud k-nearest-neighbour PCA (`k=16`)",
+        "",
+        "### Applied transforms",
+        "",
+        "| Cloud | tx | ty | tz | rx (deg) | ry (deg) | rz (deg) |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for cloud_id in ("a", "b"):
+        tf = transforms.get(cloud_id) if isinstance(transforms, dict) else {}
+        tf = tf if isinstance(tf, dict) else {}
+        lines.append("| Cloud {} | {} | {} | {} | {} | {} | {} |".format(
+            cloud_id.upper(), *(fmt(tf.get(name, 0.0)) for name in ("tx", "ty", "tz", "rx", "ry", "rz"))))
+    lines.extend(["", "## Metrics", ""])
+    definitions = {
+        "accuracy": ("\u8861\u91cf\u9884\u6d4b\u51fa\u6765\u7684\u8868\u9762\u6709\u591a\u5c11\u662f\u771f\u7684\u9760\u8fd1\u771f\u503c\u8868\u9762\u3002", r"$$Accuracy=\frac{1}{|P|}\sum_{p \in P} d(p,G)$$"),
+        "completeness": ("\u8861\u91cf\u771f\u503c\u8868\u9762\u6709\u6ca1\u6709\u88ab\u9884\u6d4b\u7ed3\u679c\u8986\u76d6\u5230\u3002", r"$$Completeness=\frac{1}{|G|}\sum_{g \in G}d(g,P)$$"),
+        "chamfer": ("Chamfer Distance \u662f Accuracy \u548c Completeness \u7684\u7efc\u5408\u5f62\u5f0f\u3002", r"$$CD_{L1}=\frac{1}{|P|}\sum_{p \in P}d(p,G)+\frac{1}{|G|}\sum_{g \in G}d(g,P)$$"),
+        "fscore": ("F-score \u662f Precision \u548c Recall \u7684\u8c03\u548c\u5e73\u5747\u6570\u3002", r"$$F-score(\tau)=\frac{2\cdot Precision(\tau)\cdot Recall(\tau)}{Precision(\tau)+Recall(\tau)}$$"),
+        "auc": ("AUC \u8868\u793a F-Score-Threshold \u66f2\u7ebf\u5728\u4e0d\u540c\u5bb9\u5fcd\u8bef\u5dee\u4e0b\u7684\u6574\u4f53\u8868\u73b0\u3002", r"$$AUC=\frac{1}{\tau_{max}}\int_0^{\tau_{max}}F(\tau)d\tau$$"),
+        "normal_consistency": ("NC \u8bc4\u4ef7\u9884\u6d4b\u8868\u9762\u4e0e GT \u8868\u9762\u5728\u5c40\u90e8\u671d\u5411\u4e0a\u7684\u4e00\u81f4\u7a0b\u5ea6\u3002", r"$$NC=\frac{1}{|P|}\sum_{p \in P}|n_p\cdot n_{g^*}|$$"),
+    }
+    for metric in selected:
+        name = _COMPARISON_METRIC_NAMES[metric]
+        lines.extend([f"### {name}", "", f"**Value:** `{fmt(values.get(metric))}`", "", definitions[metric][0], "", definitions[metric][1], ""])
+        if metric == "fscore":
+            lines.extend([f"- Precision(`tau`): `{fmt(values.get('precision'))}`", f"- Recall(`tau`): `{fmt(values.get('recall'))}`", ""])
+        elif metric == "auc":
+            lines.extend(["Discrete implementation uses the trapezoidal rule over the 100 sampled thresholds, then normalizes by `tau_max`.", ""])
+        elif metric == "normal_consistency" and normal_note:
+            lines.extend([f"**Note:** {normal_note}", ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+@app.post("/api/comparison/evaluate")
+def api_comparison_evaluate():
+    body = request.get_json(silent=True) or {}
+    selected = body.get("metrics")
+    if not isinstance(selected, list):
+        return jsonify({"error": "metrics must be a list"}), 400
+    selected = [str(metric) for metric in selected if str(metric) in _COMPARISON_METRIC_NAMES]
+    selected = list(dict.fromkeys(selected))
+    if not selected:
+        return jsonify({"error": "Select at least one evaluation metric"}), 400
+    try:
+        tau = float(body.get("tau", 0.05))
+        tau_max = float(body.get("tau_max", 0.10))
+    except (TypeError, ValueError):
+        return jsonify({"error": "tau and tau_max must be numbers"}), 400
+    if not np.isfinite(tau) or tau < 0:
+        return jsonify({"error": "tau must be >= 0"}), 400
+    if not np.isfinite(tau_max) or tau_max <= 0:
+        return jsonify({"error": "tau_max must be > 0"}), 400
+    if tau > tau_max:
+        return jsonify({"error": "tau must be <= tau_max"}), 400
+    auc_samples = 100
+    with STATE_LOCK:
+        cloud_a = COMPARISON_STATE["clouds"].get("a")
+        cloud_b = COMPARISON_STATE["clouds"].get("b")
+        if not cloud_a or not cloud_b:
+            return jsonify({"error": "Load both comparison point clouds before evaluating"}), 400
+        transforms = body.get("transforms") if isinstance(body.get("transforms"), dict) else {}
+        points_a = _comparison_transformed_xyz(cloud_a["source"], transforms.get("a"))
+        points_b = _comparison_transformed_xyz(cloud_b["source"], transforms.get("b"))
+        filename_a, filename_b = cloud_a["filename"], cloud_b["filename"]
+    try:
+        distances_p, nearest_gt = _comparison_nearest(points_a, points_b, return_indices=True)
+        distances_g, _ = _comparison_nearest(points_b, points_a)
+        values: Dict[str, Any] = {}
+        accuracy = float(np.mean(distances_p))
+        completeness = float(np.mean(distances_g))
+        if "accuracy" in selected:
+            values["accuracy"] = accuracy
+        if "completeness" in selected:
+            values["completeness"] = completeness
+        if "chamfer" in selected:
+            values["chamfer"] = accuracy + completeness
+        precision, recall, fscore = _comparison_fscore(distances_p, distances_g, tau)
+        if "fscore" in selected:
+            values.update({"precision": precision, "recall": recall, "fscore": fscore})
+        if "auc" in selected:
+            thresholds = np.linspace(0.0, tau_max, auc_samples)
+            scores = np.asarray([_comparison_fscore(distances_p, distances_g, threshold)[2] for threshold in thresholds])
+            integrate = getattr(np, "trapezoid", None) or np.trapz
+            values["auc"] = float(integrate(scores, thresholds) / tau_max)
+        normal_note = None
+        if "normal_consistency" in selected:
+            normals_p = _comparison_normals(points_a, k=16)
+            normals_g = _comparison_normals(points_b, k=16)
+            if normals_p is None or normals_g is None:
+                values["normal_consistency"] = None
+                normal_note = "NC requires non-degenerate local PCA neighbourhoods in both clouds."
+            else:
+                dots = np.abs(np.sum(normals_p * normals_g[nearest_gt], axis=1))
+                values["normal_consistency"] = float(np.mean(np.clip(dots, 0.0, 1.0)))
+        markdown = _comparison_markdown(filename_a, filename_b, points_a, points_b, transforms, tau, tau_max,
+                                        auc_samples, selected, values, normal_note)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    filename = f"comparison_evaluation_{timestamp}.md"
+    path = os.path.join(EVALUATION_ROOT, filename)
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(markdown)
+    return jsonify({"ok": True, "filename": filename, "download_url": f"/api/comparison/evaluations/{filename}",
+                    "selected_metrics": selected, "values": values, "markdown": markdown})
+
+
+@app.get("/api/comparison/evaluations/<filename>")
+def api_comparison_evaluation_download(filename: str):
+    if os.path.basename(filename) != filename or not filename.startswith("comparison_evaluation_") or not filename.endswith(".md"):
+        return jsonify({"error": "Invalid evaluation filename"}), 400
+    path = os.path.join(EVALUATION_ROOT, filename)
+    if not os.path.isfile(path):
+        return jsonify({"error": "Evaluation report not found"}), 404
+    return send_file(path, as_attachment=True, download_name=filename, mimetype="text/markdown")
 
 
 @app.get("/api/parts")

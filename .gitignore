@@ -1,4 +1,3 @@
 __pycache__/
 *.py[cod]
-generated/*.pt
-generated/*.zip
+generated/

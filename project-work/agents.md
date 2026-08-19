@@ -141,6 +141,22 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 - Comparison transform controls expose both range sliders and numeric inputs. Translation sliders use `-5..5`
   with `.01` steps; rotation sliders use `-180..180` with `.5` degree steps, and both input types stay synchronized.
 
+## Comparison Evaluate Notes (2026-08-19)
+
+- `POST /api/comparison/evaluate` keeps Comparison isolated from editor `STATE`. Cloud A is always Prediction
+  (`P`) and Cloud B is always Ground Truth (`G`); the request sends the browser's current A/B transforms in
+  degrees, and the backend applies the same ZYX rotation about each immutable cloud centroid.
+- The endpoint accepts selected metric IDs plus `tau` and `tau_max`. It computes exact, double-chunked NumPy
+  nearest neighbours to bound temporary distance buffers, then returns Accuracy, Completeness, L1 Chamfer,
+  F-Score/Precision/Recall, normalized 100-sample AUC, and optional Normal Consistency.
+- NC estimates unoriented normals through same-cloud `k=16` PCA. Insufficient or degenerate neighbourhoods
+  yield `N/A` with an explanatory report note rather than failing the remaining selected metrics.
+- Markdown reports are UTF-8 files under `generated/evaluations/`, ignored by Git. Their download route accepts
+  only generated `comparison_evaluation_*.md` basenames. The cloud endpoint is constrained to `/a` and `/b`
+  so it cannot shadow `/api/comparison/evaluate`.
+- The Comparison panel defaults to Accuracy, Completeness, Chamfer Distance, and F-Score, with `tau=0.05` and
+  `tau_max=0.10`; it downloads the returned Markdown Blob and displays a result summary after evaluation.
+
 ## Raw Tensor PT Notes (2026-08-18)
 
 - `load_pt_bytes` accepts a raw `torch.Tensor` saved directly with `torch.save` when it is two-dimensional

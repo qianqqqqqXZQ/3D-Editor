@@ -233,3 +233,30 @@ py -3.13 -m py_compile app.py
 - Browser Comparison fixture showed six transform sliders with the expected ranges.
 - Dragging TX/RZ set both range and number values to `3`/`90`; switching to Cloud B left those values independent,
   and returning to A restored them. Numeric `TY=-2` input updated its slider, with no browser warnings/errors.
+
+## Current Request: Comparison Evaluate metric report (2026-08-19)
+
+- [x] Create a recoverable Git checkpoint before the Evaluate implementation (`02b2190`).
+- [x] Add server-side exact chunked nearest-neighbour metrics for Accuracy, Completeness, Chamfer Distance,
+  F-Score, AUC, and PCA-estimated Normal Consistency.
+- [x] Apply the current client-side Cloud A/B transforms around each cloud centroid during evaluation,
+  with Cloud A fixed as Prediction and Cloud B fixed as Ground Truth.
+- [x] Add the Comparison Evaluate panel with six metric checkboxes, defaults for the base four metrics,
+  editable `tau`/`tau_max`, validation states, and automatic Markdown download.
+- [x] Persist reports under `generated/evaluations/` and add a filename-constrained download endpoint.
+- [x] Run backend regression, live-server route, frontend syntax, desktop/mobile browser, console, diff,
+  and focused code-review checks.
+
+2026-08-19 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Flask test client covered identical clouds, directional distances, transforms, strict threshold behavior,
+  AUC, planar NC, degenerate NC `N/A`, validation errors, report persistence, download, and Comparison cleanup.
+- Live server smoke check confirmed `/api/comparison/evaluate` is not shadowed by the dynamic cloud route;
+  the route now constrains `cloud_id` to `a` or `b`.
+- Active `static/editor.html` script parsed with Node `new Function`.
+- In-app browser verified default checkbox state, disabled/enabled Evaluate state, report summary/download flow,
+  `390x844` layout without horizontal overflow, and no console warnings/errors.
+- `git diff --check`
+- Focused review covered A/B direction, transform parity, bounded distance buffers, PCA edge cases,
+  report path validation, and isolation from editor state.
