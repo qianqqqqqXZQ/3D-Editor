@@ -459,6 +459,33 @@ def _remove_static_indices_from_parts(indices: List[int]) -> None:
             part.get("vertex_indices", set()).difference_update(indices)
 
 
+def _delete_static_vertices(indices: List[int]) -> int:
+    """Physically remove static vertices and remap every remaining Part index."""
+    count = int(STATE.get("n_vertices", 0))
+    deleted = sorted({int(index) for index in indices if 0 <= int(index) < count})
+    if not deleted:
+        return 0
+
+    keep = np.ones(count, dtype=bool)
+    keep[deleted] = False
+    old_to_new = np.full(count, -1, dtype=np.int32)
+    old_to_new[keep] = np.arange(int(np.count_nonzero(keep)), dtype=np.int32)
+
+    for field in ("xyz", "quats", "scales", "opacities", "sh0", "sh_rest", "part_id_array"):
+        values = STATE.get(field)
+        if values is not None:
+            STATE[field] = np.asarray(values)[keep]
+    for part in STATE["parts"].values():
+        if part.get("is_4dgs", False):
+            continue
+        part["vertex_indices"] = {
+            int(old_to_new[index]) for index in part.get("vertex_indices", set())
+            if 0 <= int(index) < count and old_to_new[int(index)] >= 0
+        }
+    STATE["n_vertices"] = int(np.count_nonzero(keep))
+    return len(deleted)
+
+
 def _refresh_static_part_pivot(pid: int) -> List[float]:
     part = STATE["parts"][pid]
     indices = sorted(part.get("vertex_indices", set()))
@@ -1250,6 +1277,7 @@ def api_update_part_v2(pid):
 
 @app.delete("/api/parts/<int:pid>")
 def api_delete_part_v2(pid):
+    """Remove a Part and its animation, leaving its static vertices unassigned."""
     with STATE_LOCK:
         part = STATE["parts"].get(pid)
         if part is None:
@@ -1264,6 +1292,23 @@ def api_delete_part_v2(pid):
         STATE["tracks"].pop(pid, None)
         STATE["loaded"] = _workspace_has_data()
         return jsonify({"ok": True, "deleted_part_id": pid})
+
+
+@app.delete("/api/parts/<int:pid>/vertices")
+def api_delete_part_vertices(pid):
+    """Destructively delete a static Part and all of its source vertices."""
+    with STATE_LOCK:
+        part = STATE["parts"].get(pid)
+        if part is None:
+            return jsonify({"error": "Part not found"}), 404
+        if part.get("is_4dgs", False):
+            return jsonify({"error": "Vertex deletion is only supported for static Parts"}), 400
+        deleted = _delete_static_vertices(sorted(part.get("vertex_indices", set())))
+        STATE["parts"].pop(pid, None)
+        STATE["tracks"].pop(pid, None)
+        STATE["loaded"] = _workspace_has_data()
+        return jsonify({"ok": True, "deleted_part_id": pid, "deleted_vertices": deleted,
+                        "n_vertices": int(STATE["n_vertices"])})
 
 
 @app.post("/api/parts/<int:pid>/assign")

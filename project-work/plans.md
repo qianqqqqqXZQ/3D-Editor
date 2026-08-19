@@ -301,3 +301,23 @@ py -3.13 -m py_compile app.py
 - `git diff --check`
 - Focused review confirmed both public path-bearing export routes resolve user paths before
   directory creation or background worker writes, while extension handling remains unchanged.
+
+## Current Request: Separate Part removal from point deletion (2026-08-19)
+
+- [x] Create a recoverable Git checkpoint before changing Part deletion semantics (`085c784`).
+- [x] Preserve the existing non-destructive Part removal operation, with unambiguous UI wording.
+- [x] Add an explicit destructive static-vertex deletion operation that compacts point-cloud data
+  and remaps every remaining Part's vertex indices.
+- [x] Add focused API regression coverage for both operations, export/re-upload behavior, and
+  4DGS validation; run syntax, diff, and focused code-review checks.
+
+2026-08-19 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Active `static/editor.html` script parsed with Node `--check`.
+- Flask test-client regression confirmed non-destructive removal preserves source vertices,
+  destructive deletion compacts arrays and remaps surviving Part indices, exported/re-uploaded
+  point counts exclude deleted vertices, and 4DGS vertex deletion is rejected.
+- `git diff --check`
+- Focused review covered shared-array compaction, Part index remapping, empty-workspace state,
+  4DGS isolation, confirmation wording, and stale frontend element references.

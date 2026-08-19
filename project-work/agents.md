@@ -70,7 +70,9 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 
 - `GET /api/frame/<frame>` emits `count + xyz` for static-only workspaces and adds RGB plus Part ids when a 4DGS Part exists. Keyframe preview transforms remain client-side.
 - `POST /api/export` serializes in a background thread using `export_active`, `export_progress`, and `export_done`; `POST /api/export_current` applies Part transforms before writing a `.pt` file.
-- Static vertices unassigned after Part deletion remain in point-cloud and export data with SH-derived display colors.
+- Part deletion is intentionally split: `DELETE /api/parts/<pid>` is non-destructive and removes
+  only the Part assignment/animation, while `DELETE /api/parts/<pid>/vertices` destructively removes
+  a static Part's vertices, compacts all point attributes, and remaps remaining Part indices.
 - Verification is the compile command plus the Flask-client regression and browser desktop/mobile checks recorded in `plans.md`.
 
 ## Frontend Contract Notes (2026-08-16)
