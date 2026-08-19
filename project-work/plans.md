@@ -260,3 +260,28 @@ py -3.13 -m py_compile app.py
 - `git diff --check`
 - Focused review covered A/B direction, transform parity, bounded distance buffers, PCA edge cases,
   report path validation, and isolation from editor state.
+
+## Current Request: Point-cloud geometric scaling (2026-08-19)
+
+- [x] Create a recoverable Git checkpoint before scaling changes (`a1ad8b5`).
+- [x] Add positive scale validation and centroid-based XYZ scaling to Comparison Evaluate,
+  Export Current, and Export All; preserve default `scale=1` compatibility.
+- [x] Add editor Scale controls with immutable-source preview, centroid-preserving Pivot motion,
+  and export request propagation.
+- [x] Add independent Comparison A/B Scale controls, transform/report serialization, and Dual-view
+  geometry synchronization.
+- [x] Run backend regressions, JavaScript syntax checks, desktop/mobile browser checks, console inspection,
+  diff validation, and focused code review.
+
+2026-08-19 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Flask test-client/in-memory regression covered centroid math, default and invalid scales, Comparison
+  Evaluate metrics, Export Current, and background Export All outputs.
+- Active `static/editor.html` script parsed with Node `--check`.
+- In-app browser verified editor and Comparison Scale controls, bidirectional input sync, independent A/B
+  values, two Dual-view canvases, mobile `390x844` no-overflow layout, editor-only control hiding, and no
+  warning/error console entries.
+- `git diff --check`
+- Focused review covered scale order, immutable source positions, export parameter capture, report compatibility,
+  Dual-pane geometry synchronization, and Comparison/editor state isolation.

@@ -165,3 +165,19 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 - Raw RGB uses the existing `_normalise_rgb` behavior, converting common 0..255 values to clipped 0..1.
 - Invalid raw Tensor shapes raise `ValueError("Raw .pt tensors must have shape (N, >=3).")`; gsplat dict/list
   payload handling remains unchanged.
+
+## Point-cloud Scaling Notes (2026-08-19)
+
+- The editor keeps `editorScale` separate from Comparison state. Preview always starts from immutable
+  `originalPositions`, computes the current frame centroid, applies existing Part transforms, then applies
+  the global scale around that centroid. Pivot marker positions follow the same final scale.
+- Editor Export Current and Export All requests automatically include the active editor scale. The backend
+  validates positive finite values (maximum 100 for API safety), defaults missing values to `1.0`, and scales
+  each exported frame's XYZ around its post-transform centroid without changing other Gaussian attributes.
+- Comparison transforms now include `scale` (default `1.0`) in independent A/B state. The browser applies it
+  around each immutable cloud centroid before rotation/translation, synchronizes existing Dual-view pane
+  geometries, and uses transformed coordinates for PLY export.
+- `POST /api/comparison/evaluate` accepts optional `transforms.a.scale` and `transforms.b.scale`; omitted scale
+  remains backward compatible. Markdown reports include the applied scale column and invalid scales return HTTP 400.
+- Scale controls use `0.1..5` with `.01` steps. The editor control is hidden in Comparison mode; Comparison
+  exposes one Scale range/number pair for the selected Cloud A or Cloud B.

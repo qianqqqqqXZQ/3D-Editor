@@ -496,6 +496,26 @@ def _transform_xyz(xyz: np.ndarray, pivot: List[float], key: Dict[str, float]) -
     return (xyz - p) @ R.T + p + t
 
 
+def _clean_scale(value: Any = 1.0) -> float:
+    """Validate a positive global point-cloud scale from a public request."""
+    try:
+        scale = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("scale must be a number") from exc
+    if not np.isfinite(scale) or scale <= 0 or scale > 100:
+        raise ValueError("scale must be finite, greater than 0, and at most 100")
+    return scale
+
+
+def _scale_xyz_about_centroid(xyz: np.ndarray, scale: float) -> np.ndarray:
+    """Scale XYZ around its own centroid without mutating the input array."""
+    points = np.asarray(xyz, dtype=np.float64).reshape((-1, 3))
+    if len(points) == 0 or scale == 1.0:
+        return points.copy()
+    pivot = np.mean(points, axis=0)
+    return (points - pivot) * float(scale) + pivot
+
+
 def _rotate_quats(quats: np.ndarray, key: Dict[str, float]) -> np.ndarray:
     """Apply the Part's Euler rotation to wxyz source quaternions."""
     _, r = _key_rotation(key)
@@ -922,11 +942,12 @@ def _comparison_transformed_xyz(source: Dict[str, Any], transform: Any) -> np.nd
             value = 0.0
         values.append(value)
     tx, ty, tz, rx, ry, rz = values
+    scale = _clean_scale(raw.get("scale", 1.0))
     if not len(xyz):
         return xyz.copy()
     pivot = np.mean(xyz, axis=0)
     rotation = euler_to_rotation_matrix(rx, ry, rz)
-    return (xyz - pivot) @ rotation.T + pivot + np.asarray([tx, ty, tz], dtype=np.float64)
+    return ((xyz - pivot) * scale) @ rotation.T + pivot + np.asarray([tx, ty, tz], dtype=np.float64)
 
 
 def _comparison_nearest(source: np.ndarray, target: np.ndarray, *, return_indices: bool = False,
@@ -1048,14 +1069,15 @@ def _comparison_markdown(filename_a: str, filename_b: str, points_a: np.ndarray,
         "",
         "### Applied transforms",
         "",
-        "| Cloud | tx | ty | tz | rx (deg) | ry (deg) | rz (deg) |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Cloud | tx | ty | tz | rx (deg) | ry (deg) | rz (deg) | scale |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for cloud_id in ("a", "b"):
         tf = transforms.get(cloud_id) if isinstance(transforms, dict) else {}
         tf = tf if isinstance(tf, dict) else {}
-        lines.append("| Cloud {} | {} | {} | {} | {} | {} | {} |".format(
-            cloud_id.upper(), *(fmt(tf.get(name, 0.0)) for name in ("tx", "ty", "tz", "rx", "ry", "rz"))))
+        lines.append("| Cloud {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            cloud_id.upper(), *(fmt(tf.get(name, 0.0)) for name in ("tx", "ty", "tz", "rx", "ry", "rz")),
+            fmt(tf.get("scale", 1.0))))
     lines.extend(["", "## Metrics", ""])
     definitions = {
         "accuracy": ("\u8861\u91cf\u9884\u6d4b\u51fa\u6765\u7684\u8868\u9762\u6709\u591a\u5c11\u662f\u771f\u7684\u9760\u8fd1\u771f\u503c\u8868\u9762\u3002", r"$$Accuracy=\frac{1}{|P|}\sum_{p \in P} d(p,G)$$"),
@@ -1105,8 +1127,11 @@ def api_comparison_evaluate():
         if not cloud_a or not cloud_b:
             return jsonify({"error": "Load both comparison point clouds before evaluating"}), 400
         transforms = body.get("transforms") if isinstance(body.get("transforms"), dict) else {}
-        points_a = _comparison_transformed_xyz(cloud_a["source"], transforms.get("a"))
-        points_b = _comparison_transformed_xyz(cloud_b["source"], transforms.get("b"))
+        try:
+            points_a = _comparison_transformed_xyz(cloud_a["source"], transforms.get("a"))
+            points_b = _comparison_transformed_xyz(cloud_b["source"], transforms.get("b"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         filename_a, filename_b = cloud_a["filename"], cloud_b["filename"]
     try:
         distances_p, nearest_gt = _comparison_nearest(points_a, points_b, return_indices=True)
@@ -1361,9 +1386,11 @@ def api_frame_transforms(frame):
     return jsonify(payload)
 
 
-def _export_frame_payload(frame: int) -> Dict[str, Any]:
+def _export_frame_payload(frame: int, scale: float = 1.0) -> Dict[str, Any]:
     """Build one exportable frame, including 4DGS attributes when present."""
-    return compute_full_frame_data(frame, apply_transforms=True)
+    payload = compute_full_frame_data(frame, apply_transforms=True)
+    payload["xyz"] = _scale_xyz_about_centroid(payload["xyz"], scale)
+    return payload
 
 
 @app.post("/api/export")
@@ -1372,6 +1399,10 @@ def api_export():
     output_dir = body.get("output_dir")
     if not isinstance(output_dir, str) or not output_dir.strip():
         return jsonify({"error": "output_dir is required"}), 400
+    try:
+        scale = _clean_scale(body.get("scale", 1.0))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     with STATE_LOCK:
         if not STATE["loaded"] or not _workspace_has_data():
             return jsonify({"error": "No point-cloud data is loaded"}), 400
@@ -1390,7 +1421,7 @@ def api_export():
     def worker():
         try:
             for index in range(frame_count):
-                payload = _export_frame_payload(index)
+                payload = _export_frame_payload(index, scale=scale)
                 _write_pt(os.path.join(output_dir, f"frame_{index:04d}.pt"), payload)
                 with STATE_LOCK:
                     STATE["export_progress"] = int((index + 1) * 100 / max(1, frame_count))
@@ -1424,6 +1455,10 @@ def api_export_current_v2():
         frame = int(body.get("frame", 0))
     except (TypeError, ValueError):
         return jsonify({"error": "frame must be an integer"}), 400
+    try:
+        scale = _clean_scale(body.get("scale", 1.0))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     with STATE_LOCK:
         if not STATE["loaded"] or not _workspace_has_data():
             return jsonify({"error": "No point-cloud data is loaded"}), 400
@@ -1432,7 +1467,7 @@ def api_export_current_v2():
         output_path = os.path.abspath(output_path)
         try:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-            payload = _export_frame_payload(frame)
+            payload = _export_frame_payload(frame, scale=scale)
             _write_pt(output_path, payload)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
