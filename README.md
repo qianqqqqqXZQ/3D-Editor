@@ -1,6 +1,6 @@
-# 3D-Editor
+# 4DGS-Edit-and-Compare
 
-**3D-Editor is a browser-based workspace for aligning, editing, and evaluating point clouds and 4D Gaussian Splatting (4DGS) data.** It combines a Three.js/WebGL viewport with a Flask backend, making it practical to correct the pose of individual scene components, animate edits over time, compare two reconstructed assets, and export the resulting data without leaving one workflow.
+**4DGS-Edit-and-Compare is a workspace for aligning, editing, and evaluating point clouds and 4D Gaussian Splatting (4DGS) data.** It combines a Three.js/WebGL viewport with a Flask backend, making it practical to correct the pose of individual scene components, animate edits over time, compare two reconstructed assets, and export the resulting data without leaving one workflow.
 
 The project was designed for reconstruction and LiDAR-alignment work, where a model may need to be translated, rotated, scaled, inspected against a reference cloud, and saved back into a reusable format.
 
