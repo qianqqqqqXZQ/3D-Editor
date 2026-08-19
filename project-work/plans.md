@@ -353,3 +353,8 @@ py -3.13 -m py_compile app.py
 - `git diff --check`
 - Focused review covered shared-array compaction, Part index remapping, empty-workspace state,
   4DGS isolation, confirmation wording, and stale frontend element references.
+
+## Current Request: Expand Scale control range (2026-08-19)
+
+- [x] Raise the editor and Comparison Scale controls' maximum value from `10` to `20`.
+- [ ] Verify frontend parsing, bounds consistency, and the resulting diff.
