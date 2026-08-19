@@ -52,6 +52,10 @@ git diff --check
 Export path inputs are resolved on the server with user-home and environment-variable expansion,
 so Linux inputs such as `~/Desktop/delete` produce `~/Desktop/delete.pt` for current-frame export.
 
+New workspaces default to one timeline frame. `POST /api/export` treats a one-frame request's `output_dir`
+value as a file path (adding `.pt` when needed), so `~/Desktop/new` writes `~/Desktop/new.pt`; multi-frame
+requests retain directory output with `frame_0000.pt`, `frame_0001.pt`, and so on.
+
 ## Linux Compatibility (2026-08-17)
 
 - The backend has no Windows-specific paths or system commands. `app.py` listens on

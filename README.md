@@ -11,7 +11,7 @@ The project was designed for reconstruction and LiDAR-alignment work, where a mo
 - **4DGS support:** Load `.ply` point clouds, gsplat-style `.pt` checkpoints, raw PyTorch tensors, or a directory of `.pt` frames as a looping 4DGS Part.
 - **Cloud-to-cloud comparison:** Load Cloud A and Cloud B in an isolated comparison workspace, view them individually, overlaid, or in synchronized dual viewports.
 - **Alignment and evaluation:** Apply independent translation, ZYX rotation, and centroid-preserving scale to each comparison cloud. Generate Markdown reports with Accuracy, Completeness, Chamfer Distance, F-Score, AUC, and optional normal consistency.
-- **Export-ready output:** Export a transformed comparison cloud as binary PLY, the current editor frame as `.pt`, or every timeline frame as a batch export.
+- **Export-ready output:** Export a transformed comparison cloud as binary PLY, the current editor frame as `.pt`, or every timeline frame as a batch export. New workspaces default to one frame.
 
 ## What You Can Do
 

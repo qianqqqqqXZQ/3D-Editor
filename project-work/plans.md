@@ -357,4 +357,32 @@ py -3.13 -m py_compile app.py
 ## Current Request: Expand Scale control range (2026-08-19)
 
 - [x] Raise the editor and Comparison Scale controls' maximum value from `10` to `20`.
-- [ ] Verify frontend parsing, bounds consistency, and the resulting diff.
+- [x] Verify frontend parsing, bounds consistency, and the resulting diff.
+
+2026-08-19 verification completed:
+
+- Inline `static/editor.html` JavaScript parsed successfully with Node.
+- PowerShell assertions confirmed editor and Comparison range/number controls and both input clamps use `20`.
+- Confirmed no old Scale-specific `10` bound remains; unrelated Total frames bound is unchanged.
+- `git diff --check`
+- Focused review confirmed the editor and Comparison controls remain synchronized, while the backend API
+  validation remains broader (`0 < scale <= 100`) and therefore accepts the new UI maximum.
+
+## Current Request: Default to single-frame export (2026-08-19)
+
+- [x] Change the editor/backend default timeline length to one frame and allow `num_frames=1`.
+- [x] Make single-frame batch export treat `~/Desktop/new` as `~/Desktop/new.pt`.
+- [x] Run backend export regression, frontend syntax checks, diff validation, and focused code review.
+
+2026-08-19 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Flask test-client regression with a temporary simulated home directory confirmed the default state is one
+  frame, `num_frames=0` is rejected, `~/Desktop/new` writes exactly `new.pt`, and explicit two-frame exports
+  still write `frame_0000.pt` and `frame_0001.pt` under the requested directory.
+- Active `static/editor.html` inline JavaScript parsed successfully with Node; the editor settings and timeline
+  default to one frame, and the export dialog explains the single-file versus multi-frame path behavior.
+- `git diff --check`
+- Focused review confirmed path expansion occurs before directory creation, single-file exports create only the
+  parent directory, multi-frame exports preserve the existing background worker/progress contract, and the legacy
+  embedded fallback no longer advertises a stale 30-frame client default.

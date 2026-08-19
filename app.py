@@ -65,7 +65,7 @@ STATE: Dict[str, Any] = {
     "parts": {},
     "next_part_id": 0,
     "tracks": {},
-    "num_frames": 30,
+    "num_frames": 1,
     "interpolation_method": "linear",
     "export_progress": -1,
     "export_dir": None,
@@ -444,7 +444,7 @@ def _reset_workspace() -> None:
         "loaded": False, "filename": "", "n_vertices": 0, "xyz": None, "quats": None,
         "scales": None, "opacities": None, "sh0": None, "sh_rest": None, "colors": None,
         "color_valid": None, "sh_degree": 0,
-        "part_id_array": None, "parts": {}, "next_part_id": 0, "tracks": {}, "num_frames": 30,
+        "part_id_array": None, "parts": {}, "next_part_id": 0, "tracks": {}, "num_frames": 1,
         "interpolation_method": "linear", "export_progress": -1, "export_dir": None,
         "export_done": False, "export_active": False, "4dgs_parts": {},
     })
@@ -1445,8 +1445,8 @@ def _update_settings(body: Dict[str, Any]):
         num_frames = int(body.get("num_frames", STATE["num_frames"]))
     except (TypeError, ValueError):
         return "num_frames must be an integer"
-    if num_frames < 2:
-        return "num_frames must be at least 2"
+    if num_frames < 1:
+        return "num_frames must be at least 1"
     if num_frames > 10000:
         return "num_frames must be at most 10000"
     method = body.get("interpolation_method", STATE["interpolation_method"])
@@ -1500,7 +1500,6 @@ def api_export():
     output_dir = body.get("output_dir")
     if not isinstance(output_dir, str) or not output_dir.strip():
         return jsonify({"error": "output_dir is required"}), 400
-    output_dir = _resolve_user_path(output_dir)
     try:
         scale = _clean_scale(body.get("scale", 1.0))
         color_mode = _clean_color_mode(body.get("color_mode", "original"))
@@ -1511,21 +1510,25 @@ def api_export():
             return jsonify({"error": "No point-cloud data is loaded"}), 400
         if STATE.get("export_active", False):
             return jsonify({"error": "An export is already in progress"}), 409
+        frame_count = int(STATE["num_frames"])
+        single_file = frame_count == 1
+        output_path = output_dir if output_dir.lower().endswith(".pt") else output_dir + ".pt"
+        output_target = _resolve_user_path(output_path if single_file else output_dir)
         try:
-            os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(os.path.dirname(output_target) if single_file else output_target, exist_ok=True)
         except OSError as exc:
             return jsonify({"error": str(exc)}), 400
-        frame_count = int(STATE["num_frames"])
         STATE["export_active"] = True
         STATE["export_done"] = False
         STATE["export_progress"] = 0
-        STATE["export_dir"] = os.path.abspath(output_dir)
+        STATE["export_dir"] = output_target
 
     def worker():
         try:
             for index in range(frame_count):
                 payload = _export_frame_payload(index, scale=scale, color_mode=color_mode)
-                _write_pt(os.path.join(output_dir, f"frame_{index:04d}.pt"), payload)
+                path = output_target if single_file else os.path.join(output_target, f"frame_{index:04d}.pt")
+                _write_pt(path, payload)
                 with STATE_LOCK:
                     STATE["export_progress"] = int((index + 1) * 100 / max(1, frame_count))
         except Exception:
@@ -1537,7 +1540,10 @@ def api_export():
                 STATE["export_done"] = STATE["export_progress"] == 100
 
     threading.Thread(target=worker, daemon=True, name="4dgs-export").start()
-    return jsonify({"ok": True, "num_frames": frame_count, "output_dir": os.path.abspath(output_dir), "color_mode": color_mode})
+    result = {"ok": True, "num_frames": frame_count, "output_dir": output_target, "color_mode": color_mode}
+    if single_file:
+        result["output_path"] = output_target
+    return jsonify(result)
 
 
 @app.get("/api/export/status")
@@ -1698,10 +1704,10 @@ HTML_PAGE = r'''<!doctype html>
 @media(max-width:1000px){.app{grid-template-columns:220px 1fr;grid-template-rows:58px 1fr 190px}.right{display:none}}
 <aside class="side"><div class="section"><h3>Data</h3><input id="fileInput" class="file" type="file" multiple accept=".ply,.pt"><input id="appendInput" class="file" type="file" multiple accept=".ply,.pt" style="display:none"><input id="frameInput" class="file" type="file" multiple accept=".pt" webkitdirectory directory style="display:none"><div id="progress" class="small"></div></div><div class="section"><h3>Parts</h3><div id="parts"></div><div class="row"><button id="newPart" class="grow">Create Part</button><button id="deletePart">Delete</button></div></div><div class="section"><h3>Viewport</h3><div class="row"><label class="grow">Point size <input id="pointSize" type="range" min="1" max="12" step=".5" value="3"></label></div><div class="row"><button id="resetView" class="grow">Reset View</button><button id="clearSelection">Clear</button></div></div><div class="section"><h3>Log</h3><div id="log" class="log"></div></div></aside>
 <main id="viewport" class="viewport"><div class="hint">拖拽矩形框选点 · 左键旋转 · 右键平移 · 滚轮缩放</div><div id="selection" class="selection"></div></main>
-<aside class="right"><div class="section"><h3>Part 属性</h3><div class="row"><label class="grow small">名称<input id="partName" type="text"></label></div><div class="small">Pivot</div><div class="kv"><label>X<input id="px" type="number" step=".01"></label><label>Y<input id="py" type="number" step=".01"></label><label>Z<input id="pz" type="number" step=".01"></label></div><button id="savePart" style="margin-top:8px;width:100%">保存属性</button></div><div class="section"><h3>关键帧</h3><div class="row"><label class="grow small">帧<input id="kfFrame" type="number" min="0" value="0"></label><button id="addKey">添加/更新关键帧</button></div><div class="small">平移</div><div class="kv"><label>X<input id="tx" type="number" step=".01" value="0"></label><label>Y<input id="ty" type="number" step=".01" value="0"></label><label>Z<input id="tz" type="number" step=".01" value="0"></label></div><div class="small" style="margin-top:8px">旋转 (弧度)</div><div class="kv"><label>X<input id="rx" type="number" step=".01" value="0"></label><label>Y<input id="ry" type="number" step=".01" value="0"></label><label>Z<input id="rz" type="number" step=".01" value="0"></label></div><div id="keyList" class="small" style="margin-top:8px"></div></div><div class="section"><h3>动画设置</h3><div class="row"><label class="grow small">总帧数<input id="numFrames" type="number" min="1" max="10000" value="30"></label><label class="grow small">插值<select id="interp"><option value="linear">Linear</option><option value="catmull-rom">Catmull-Rom</option></select></label></div><button id="saveSettings" style="width:100%">应用设置</button></div></aside>
-<section class="timeline"><div class="timeline-head"><button id="play">播放</button><button id="stop">停止</button><span>当前帧</span><input id="currentFrame" type="number" min="0" value="0"><input id="scrub" class="grow" type="range" min="0" max="29" value="0"><span id="frameLabel" class="small">0 / 29</span></div><div id="track" class="track"><div class="ticks"><span>0</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div><div id="playhead" class="playhead" style="left:0%"></div></div></section></div>
+<aside class="right"><div class="section"><h3>Part 属性</h3><div class="row"><label class="grow small">名称<input id="partName" type="text"></label></div><div class="small">Pivot</div><div class="kv"><label>X<input id="px" type="number" step=".01"></label><label>Y<input id="py" type="number" step=".01"></label><label>Z<input id="pz" type="number" step=".01"></label></div><button id="savePart" style="margin-top:8px;width:100%">保存属性</button></div><div class="section"><h3>关键帧</h3><div class="row"><label class="grow small">帧<input id="kfFrame" type="number" min="0" value="0"></label><button id="addKey">添加/更新关键帧</button></div><div class="small">平移</div><div class="kv"><label>X<input id="tx" type="number" step=".01" value="0"></label><label>Y<input id="ty" type="number" step=".01" value="0"></label><label>Z<input id="tz" type="number" step=".01" value="0"></label></div><div class="small" style="margin-top:8px">旋转 (弧度)</div><div class="kv"><label>X<input id="rx" type="number" step=".01" value="0"></label><label>Y<input id="ry" type="number" step=".01" value="0"></label><label>Z<input id="rz" type="number" step=".01" value="0"></label></div><div id="keyList" class="small" style="margin-top:8px"></div></div><div class="section"><h3>动画设置</h3><div class="row"><label class="grow small">总帧数<input id="numFrames" type="number" min="1" max="10000" value="1"></label><label class="grow small">插值<select id="interp"><option value="linear">Linear</option><option value="catmull-rom">Catmull-Rom</option></select></label></div><button id="saveSettings" style="width:100%">应用设置</button></div></aside>
+<section class="timeline"><div class="timeline-head"><button id="play">播放</button><button id="stop">停止</button><span>当前帧</span><input id="currentFrame" type="number" min="0" max="0" value="0"><input id="scrub" class="grow" type="range" min="0" max="0" value="0"><span id="frameLabel" class="small">0 / 0</span></div><div id="track" class="track"><div class="ticks"><span>0</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div><div id="playhead" class="playhead" style="left:0%"></div></div></section></div>
 <script src="/static/three.min.js"></script><script src="/static/OrbitControls.js"></script><script>
-const $=id=>document.getElementById(id); let state={parts:[],tracks:{},num_frames:30}; let selectedPid=null, selectedIndices=[], visibleSourceIndices=[], points, scene, camera, renderer, controls, animTimer=null, drag=null;
+const $=id=>document.getElementById(id); let state={parts:[],tracks:{},num_frames:1}; let selectedPid=null, selectedIndices=[], visibleSourceIndices=[], points, scene, camera, renderer, controls, animTimer=null, drag=null;
 function log(s){$('log').textContent=new Date().toLocaleTimeString()+' '+s+'\n'+$('log').textContent}
 async function api(url,opts={}){const r=await fetch(url,opts); const d=await r.json(); if(!r.ok) throw Error(d.error||r.statusText); return d}
 async function refresh(){state=await api('/api/state'); $('status').textContent=state.loaded?`${state.filename} · ${state.n_vertices} 点`:'未加载点云'; $('numFrames').value=state.num_frames; $('interp').value=state.interpolation_method; $('scrub').max=Math.max(0,state.num_frames-1); renderParts(); renderTrack(); loadFrame(+$('currentFrame').value||0)}
