@@ -410,3 +410,9 @@ py -3.13 -m py_compile app.py
 - [x] Replace finite `GridHelper` geometry with a shader-based procedural grid plane.
 - [x] Keep grid rendering bounded to one plane and move it in large camera-target increments.
 - [x] Run frontend/backend syntax checks, HTTP smoke, and focused code review.
+
+## Follow-up: Preserve uniform grid cell size (2026-08-20)
+
+- [x] Remove the visually larger 10-unit major grid lines.
+- [x] Keep every visible grid line at the original 1-unit spacing and thickness.
+- [x] Re-run syntax, browser rendering, and focused diff checks.

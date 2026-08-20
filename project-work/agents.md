@@ -116,7 +116,8 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 
 ## Infinite Grid Notes (2026-08-20)
 
-- The grid uses one 10,000-unit plane and a fragment shader for 1-unit minor and 10-unit major lines.
+- The grid uses one 10,000-unit plane and a fragment shader for uniform 1-unit lines; there are no
+  larger major cells that would change the apparent grid size.
 - The plane snaps to the camera target every 1,000 units, providing an effectively infinite grid without
   allocating large line geometry.
 
