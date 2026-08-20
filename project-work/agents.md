@@ -121,6 +121,15 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 - The plane snaps to the camera target every 1,000 units, providing an effectively infinite grid without
   allocating large line geometry.
 
+## Grid Depth Priority Notes (2026-08-20)
+
+- Procedural grid materials are double-sided and use `renderOrder=-10`, so the grid remains visible from
+  below while staying behind scene helpers and point geometry.
+- Thick coordinate axes use transparent materials, `depthTest:false`, and `renderOrder=100` in the active
+  editor and Comparison scenes. Sharing the transparent render queue with the grid makes the explicit order
+  authoritative, keeping axes visually above it. The legacy embedded fallback has the same double-sided,
+  low-order grid settings.
+
 ## Comparison Notes (2026-08-18)
 
 - Comparison is isolated from `STATE` through `COMPARISON_STATE`; it never changes the active Parts,

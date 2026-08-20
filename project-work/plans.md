@@ -416,3 +416,19 @@ py -3.13 -m py_compile app.py
 - [x] Remove the visually larger 10-unit major grid lines.
 - [x] Keep every visible grid line at the original 1-unit spacing and thickness.
 - [x] Re-run syntax, browser rendering, and focused diff checks.
+
+## Current Request: Grid depth priority and underside visibility (2026-08-20)
+
+- [x] Make the procedural grid render double-sided so it remains visible when viewed from below.
+- [x] Give the grid an explicit low render order and keep coordinate axes above it with a high render order.
+- [x] Run frontend/backend syntax checks, browser smoke coverage, diff validation, and focused code review.
+
+2026-08-20 verification completed:
+
+- `py -3.13 -m py_compile app.py`
+- Active `static/editor.html` inline JavaScript parsed successfully with Node `--check`.
+- Browser smoke check loaded the editor and Comparison viewport, rotated the camera below the grid,
+  confirmed the grid remained visible and axes stayed readable, and recorded no console warnings/errors.
+- `git diff --check`
+- Focused review confirmed transparent grid and axis materials share a render queue, making the explicit
+  `renderOrder` values effective; the legacy embedded fallback uses the same double-sided grid behavior.
