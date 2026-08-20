@@ -398,3 +398,9 @@ py -3.13 -m py_compile app.py
 - [x] Move the return button from the Comparison sidebar to the top toolbar.
 - [x] Show it only while Comparison mode is active and keep the existing exit flow.
 - [x] Re-run syntax and diff checks.
+
+## Current Request: Expand grid range (2026-08-20)
+
+- [x] Expand the main editor, Comparison, and legacy fallback grids from 20 to 100 units.
+- [x] Preserve the original 1-unit grid spacing by matching the division count to the expanded size.
+- [x] Run frontend/backend syntax checks and review the focused diff.

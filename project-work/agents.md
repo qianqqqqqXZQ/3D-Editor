@@ -108,6 +108,12 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 - `loadPointCloud()` now parses both active binary endpoints with metadata enabled. `/api/frame` is
   selected only for 4DGS workspaces, where it also carries colors and Part IDs.
 
+## Rendering Notes (2026-08-20)
+
+- The editor and Comparison `GridHelper` instances use a 100-unit size with 100 divisions, expanding
+  the visible grid range fivefold while preserving the original 1-unit line spacing. The legacy
+  embedded fallback in `app.py` is kept in sync for deployments that do not serve `static/editor.html`.
+
 ## Comparison Notes (2026-08-18)
 
 - Comparison is isolated from `STATE` through `COMPARISON_STATE`; it never changes the active Parts,
