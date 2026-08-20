@@ -133,6 +133,10 @@
     async function uploadFiles(input,endpoint){if(!input.files.length)return;const form=new FormData();[...input.files].forEach(file=>form.append('file',file));$('progress').textContent='Uploading...';try{await api(endpoint,{method:'POST',body:form});input.value='';await refresh();log('Upload complete')}catch(error){log(error.message)}$('progress').textContent=''}
     initThree();wireEvents();wireScaleEvents();wireComparisonEvents();wireExportColorEvents();refresh().catch(error=>log(error.message));
   </script>
+<style>
+  .comparison-back{display:none!important}
+  .comparison-active .comparison-back{display:inline-block!important}
+</style>
 <script>
   const comparisonPanel=document.getElementById('comparisonPanel');
   if(comparisonPanel&&!document.getElementById('comparisonBackBtn')){
@@ -141,9 +145,10 @@
     button.type='button';
     button.textContent='Back to Editor';
     button.title='Return to editor';
-    button.style.cssText='width:100%;margin-bottom:7px';
+    button.className='comparison-back';
+    button.style.cssText='';
     button.onclick=()=>{if(typeof exitComparison==='function'&&comparisonMode)exitComparison()};
-    comparisonPanel.insertBefore(button,comparisonPanel.firstElementChild?.nextElementSibling||comparisonPanel.firstChild);
+    document.querySelector('.toolbar').insertBefore(button,document.getElementById('orbitBtn'));
   }
 </script>
 </body>

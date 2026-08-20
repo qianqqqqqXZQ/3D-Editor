@@ -212,3 +212,9 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
   async `exitComparison()` flow, preserving geometry disposal, backend session deletion, and editor refresh.
 - Verification: Node inline-script syntax check, `py -3.13 -m py_compile app.py`, HTTP 200 smoke check, and
   `git diff --check`.
+
+## Comparison Return Button Placement (2026-08-20)
+
+- The guarded `comparisonBackBtn` is inserted into the top `.toolbar`, immediately before `orbitBtn`.
+- CSS keeps it hidden in editor mode and visible only under `.comparison-active`; its click handler still calls
+  `exitComparison()`.

@@ -391,4 +391,10 @@ py -3.13 -m py_compile app.py
 - [x] Run frontend syntax, Python compile, HTTP smoke, and diff checks.
 
 2026-08-20 verification completed: Node frontend syntax check, `py -3.13 -m py_compile app.py`, HTTP 200 smoke
-check confirmed the updated editor contains the Comparison panel and return button, and `git diff --check` passed.
+ check confirmed the updated editor contains the Comparison panel and return button, and `git diff --check` passed.
+
+## Follow-up: Move Comparison return button to top toolbar (2026-08-20)
+
+- [x] Move the return button from the Comparison sidebar to the top toolbar.
+- [x] Show it only while Comparison mode is active and keep the existing exit flow.
+- [x] Re-run syntax and diff checks.
