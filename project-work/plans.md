@@ -386,3 +386,9 @@ py -3.13 -m py_compile app.py
 - Focused review confirmed path expansion occurs before directory creation, single-file exports create only the
   parent directory, multi-frame exports preserve the existing background worker/progress contract, and the legacy
   embedded fallback no longer advertises a stale 30-frame client default.
+- [x] Add a visible Back to Editor button inside the Comparison panel.
+- [x] Reuse the existing `exitComparison()` cleanup and editor refresh flow.
+- [x] Run frontend syntax, Python compile, HTTP smoke, and diff checks.
+
+2026-08-20 verification completed: Node frontend syntax check, `py -3.13 -m py_compile app.py`, HTTP 200 smoke
+check confirmed the updated editor contains the Comparison panel and return button, and `git diff --check` passed.

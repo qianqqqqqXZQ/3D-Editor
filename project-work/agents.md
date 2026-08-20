@@ -208,3 +208,7 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
 - Exported checkpoints write the selected RGB array as `colors` at both the top level and inside `splats`, while
   preserving `means`, `quats`, `scales`, `opacities`, `sh0`, `shN`, and `sh_degree`. The editor preview and
   Comparison export behavior are unchanged.
+- `static/editor.html` adds a guarded `comparisonBackBtn` below the Comparison heading. It calls the existing
+  async `exitComparison()` flow, preserving geometry disposal, backend session deletion, and editor refresh.
+- Verification: Node inline-script syntax check, `py -3.13 -m py_compile app.py`, HTTP 200 smoke check, and
+  `git diff --check`.
