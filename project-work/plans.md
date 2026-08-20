@@ -404,3 +404,9 @@ py -3.13 -m py_compile app.py
 - [x] Expand the main editor, Comparison, and legacy fallback grids from 20 to 100 units.
 - [x] Preserve the original 1-unit grid spacing by matching the division count to the expanded size.
 - [x] Run frontend/backend syntax checks and review the focused diff.
+
+## Current Request: Infinite performant grid (2026-08-20)
+
+- [x] Replace finite `GridHelper` geometry with a shader-based procedural grid plane.
+- [x] Keep grid rendering bounded to one plane and move it in large camera-target increments.
+- [x] Run frontend/backend syntax checks, HTTP smoke, and focused code review.

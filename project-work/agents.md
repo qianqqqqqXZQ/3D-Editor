@@ -114,6 +114,12 @@ static points from SH DC. Verify this work using Flask's test client and in-memo
   the visible grid range fivefold while preserving the original 1-unit line spacing. The legacy
   embedded fallback in `app.py` is kept in sync for deployments that do not serve `static/editor.html`.
 
+## Infinite Grid Notes (2026-08-20)
+
+- The grid uses one 10,000-unit plane and a fragment shader for 1-unit minor and 10-unit major lines.
+- The plane snaps to the camera target every 1,000 units, providing an effectively infinite grid without
+  allocating large line geometry.
+
 ## Comparison Notes (2026-08-18)
 
 - Comparison is isolated from `STATE` through `COMPARISON_STATE`; it never changes the active Parts,
